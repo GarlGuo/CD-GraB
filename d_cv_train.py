@@ -29,7 +29,7 @@ def d_cv_train(d_trainset: D_VisionData,
         with eventTimer("everything"):
             with eventTimer("forward_pass"):
                 Y_hat = model(X)
-                loss = criterion(i=None, Y_hat=Y_hat, Y=Y.to(torch.int64))
+                loss = criterion(Y_hat, Y.to(torch.int64))
 
             with eventTimer("backward"):
                 loss.backward()
@@ -62,16 +62,15 @@ def d_cv_train(d_trainset: D_VisionData,
 
 @torch.no_grad()
 def d_cv_test(testloader: DataLoader, d_cv_model: D_Model, epoch: int, rank, device=None, dtype=torch.float32):
-    d_cv_model.eval() 
-    global_cv_model: nn.Module = d_cv_model.get_global_averaged_model()
     if rank == 0:
-        global_cv_model.eval()
+        d_cv_model.eval()
         global_score = torch.zeros(1, device=device)
 
         length = 0
         for data, targets in testloader:
             data, targets = data.to(dtype=dtype, device=device), targets.to(dtype=dtype, device=device)
-            preds = global_cv_model.pred(data)
+            Y_hat = d_cv_model(data)
+            preds = torch.max(Y_hat, dim=1)[1]
             global_score += (preds == targets).sum()
             length += len(targets)
 
@@ -97,9 +96,8 @@ def d_cv_full_train_loss(rank, trainloader: DataLoader, d_cv_model, criterion, d
             preds = torch.max(Y_hat, dim=1)[1]
             
             cur_score += (preds == targets).sum()
-            loss = criterion(i=None, Y_hat=Y_hat, Y=targets.to(torch.int64))
+            loss = criterion(Y_hat, targets.to(torch.int64))
             cur_loss += loss * len(targets)
-            # cur_score += score * len(targets)
             length += len(targets)
 
         cur_epoch_full_train_loss = cur_loss / length

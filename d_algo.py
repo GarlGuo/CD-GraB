@@ -43,7 +43,6 @@ class D_GraB_PairBalance(D_Sorter):
         self.left_ptr, self.right_ptr = 0, self.m - 1
         self.gathered_pair_cache = [torch.zeros(
             self.d, device=self.device) for _ in range(self.n)]
-        self.args = args
 
     def all_gather_pair_cache(self):
         """

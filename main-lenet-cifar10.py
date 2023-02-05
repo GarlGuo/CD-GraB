@@ -11,7 +11,6 @@ import argparse
 import random
 import os
 import datetime
-from c_criterion import *
 import warnings
 from d_utils import print_rank_0
 from d_eventTimer import EventTimer
@@ -38,7 +37,7 @@ parser.add_argument(
 parser.add_argument(
     "--node_cnt",
     type=int,
-    default=5,
+    default=16,
     help="number of decentralized nodes",
 )
 parser.add_argument(
@@ -135,7 +134,7 @@ model_maker = lambda: d_model.LeNet(seed=args.seed).to(device)
 
 d_model = D_Model(graph.rank, args.node_cnt, protocol, model_maker)
 sgd = torch.optim.SGD(d_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-criterion = ConvexMultiClassification_Loss(d_model)
+criterion = nn.CrossEntropyLoss()
 
 args.d = sum(p.numel() for p in d_model.parameters() if p.requires_grad)
 sorter = {
@@ -161,8 +160,9 @@ for e in range(args.epochs):
     inidvidual_LOSS.append(individual_loss)
     
     dist.barrier()
-    global_avg_test_score = d_cv_test(d_data.testloader, d_model, e, cur_rank, device=device)
-    global_test_acc.append(global_avg_test_score)
+    if args.rank == 0:
+        global_avg_test_score = d_cv_test(d_data.testloader, d_model, e, cur_rank, device=device)
+        global_test_acc.append(global_avg_test_score)
     
     dist.barrier()
     if args.rank == 0:
