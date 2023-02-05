@@ -42,7 +42,6 @@ class D_GraB_PairBalance(D_Sorter):
         self.gathered_pair_cache = [torch.zeros(
             self.d, device=self.device) for _ in range(self.n)]
 
-
     def all_gather_pair_cache(self):
         """
         Flatten local grad, all_gather with other nodes, and vstack all grads
