@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from typing import List
 from d_lm_data import *
+from d_algo import D_Sorter
 from d_lstm_model import *
 from torch.optim import Optimizer
 from d_eventTimer import EventTimer
@@ -15,14 +16,19 @@ def repackage_hidden(h):
 
 
 def d_LM_train(c_data: D_LM_Dataset,
-                   optimizer: Optimizer,
-                   lm_model: D_Model,
-                   sorter, epoch, counter, args, eventTimer: EventTimer,
-                   device, criterion=nn.NLLLoss()):
+                optimizer: Optimizer,
+                lm_model: D_Model,
+                sorter: D_Sorter, 
+                epoch: int, 
+                counter, 
+                args, 
+                eventTimer: EventTimer,
+                device, 
+                criterion=nn.NLLLoss()):
     lm_model.train()
     cur_loss: torch.Tensor = torch.zeros(
         1, device=device)
-    H = lm_model.model.init_hidden(args.train_B)
+    H = lm_model.model.init_hidden(1)
     cur_loss = 0
     acc_step = 0
     with eventTimer(f"epoch-{epoch}"):
@@ -77,7 +83,7 @@ def d_LM_train(c_data: D_LM_Dataset,
 
 
 @torch.no_grad()
-def evaluate_one_model(model, dataset):
+def evaluate_one_model(model: nn.Module, dataset: Dataset):
     # Turn on evaluation mode which disables dropout.
     model.eval()
     total_loss = 0
@@ -92,13 +98,11 @@ def evaluate_one_model(model, dataset):
 
 
 @torch.no_grad()
-def d_LM_test(eval_dataset, d_lm_model: D_Model, epoch: int):
+def d_LM_test(eval_dataset: Dataset, d_lm_model: D_Model, epoch: int):
     d_lm_model.eval()
     global_avg_model = d_lm_model.model
     global_avg_model.eval()
     global_test_loss = evaluate_one_model(global_avg_model, eval_dataset)
     global_test_ppl = torch.exp(torch.as_tensor(global_test_loss))
-
-    print(
-        f'| epoch {epoch:3d} | global avg ppl {global_test_ppl.item():.4f}|', flush=True)
+    print(f'| epoch {epoch:3d} | global avg ppl {global_test_ppl.item():.4f}|', flush=True)
     return global_test_ppl

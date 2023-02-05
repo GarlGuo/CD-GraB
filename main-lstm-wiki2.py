@@ -31,7 +31,7 @@ def seed_everything(seed):
 
 
 parser = argparse.ArgumentParser(
-    description="decentralized learning with D-GraB")
+    description="D-GraB with LSTM on WikiText-2")
 parser.add_argument(
     "--log_interval",
     type=int,
@@ -43,12 +43,6 @@ parser.add_argument(
     type=int,
     default=16,
     help="number of decentralized nodes",
-)
-parser.add_argument(
-    "--train_B",
-    type=int,
-    default=1,
-    help="Batch size for the training dataloader.",
 )
 parser.add_argument(
     "--test_B",
@@ -131,14 +125,15 @@ epochs = args.epochs
 seed = args.seed
 log_interval = args.log_interval
 
+# set corresponding device id for each worker
 if args.node_cnt == torch.cuda.device_count():
-    print_rank_0(cur_rank, "Running one process per GPU")
     args.dev_id = cur_rank
 else:
     assert args.node_cnt % torch.cuda.device_count() == 0
     args.dev_id = cur_rank % torch.cuda.device_count()
-    print(f"Process {cur_rank} is running on cuda:{args.dev_id}")
 device = torch.device(f'cuda:{args.dev_id}')
+
+
 setattr(args, "use_cuda", device != torch.device("cpu"))
 
 print_rank_0(cur_rank, vars(args))
@@ -178,11 +173,9 @@ sorter = {
     "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
     "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
     "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
-    "I-PB": lambda: D_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
+    "I-PB": lambda: I_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
         d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
-
-exp_details = f"{args.sorter}-node-{args.node_cnt}-lr-{args.lr}-train-B-{args.train_B}-seed-{args.seed}"
 
 counter = tqdm(range(len(d_data) * args.epochs), miniters=100)
 global_test_ppls, global_val_ppls, global_train_val_ppls = [], [], []
@@ -191,20 +184,14 @@ local_train_losses = []
 seed_everything(args.seed)
 for e in range(1, args.epochs + 1):
     dist.barrier()
-    local_train_loss = d_LM_train(d_data, sgd, c_model, sorter, e,
-                                      counter, args, eventTimer, device)
-    local_train_losses.append(local_train_loss)
+    d_LM_train(d_data, sgd, c_model, sorter, e, counter, args, eventTimer, device)
 
     print_rank_0(cur_rank, "validation on training dataset")
     dist.barrier()
-    global_avg_train_val_ppl = d_LM_test(
-        d_data.trainset_eval, c_model, e, args.rank)
+    global_avg_train_ppl = d_LM_test(d_data.trainset_eval, c_model, e, args.rank)
 
     print_rank_0(cur_rank, "validation on testing dataset")
     dist.barrier()
-    global_avg_test_ppl = d_LM_test(
-        d_data.test_dataset, c_model, e, args.rank)
+    global_avg_test_ppl = d_LM_test(d_data.test_dataset, c_model, e, args.rank)
 
-    global_train_val_ppls.append(global_avg_train_val_ppl)
-    global_test_ppls.append(global_avg_test_ppl)
-    lr_scheduler.step(global_avg_train_val_ppl)
+    lr_scheduler.step(global_avg_train_ppl)

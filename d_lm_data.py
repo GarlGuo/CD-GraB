@@ -94,7 +94,7 @@ class D_LM_Dataset:
         self.val_dataset = LMDataset(args, batchify(self.corpus.valid, args.test_B), device=self.device)
         self.test_dataset = LMDataset(args, batchify(self.corpus.test, args.test_B), device=self.device)
 
-        self.trainset = LMDataset(args, batchify(self.corpus.train, args.train_B).to(self.device))
+        self.trainset = LMDataset(args, batchify(self.corpus.train, 1).to(self.device))
         self.indices = d_dataset_format(self.trainset, 1, node_cnt, args=args)
 
     def __len__(self):

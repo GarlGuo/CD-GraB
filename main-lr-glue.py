@@ -28,7 +28,7 @@ task_name = {
     "wnli": ("sentence1", "sentence2"),
 }
 parser = argparse.ArgumentParser(
-    description="all-reduce GraB. Tune linear head on QQP")
+    description="D-GraB with BERT embeddings on GLUE tasks")
 parser.add_argument(
     "--log_interval",
     type=int,
@@ -38,7 +38,7 @@ parser.add_argument(
 parser.add_argument(
     "--node_cnt",
     type=int,
-    default=5,
+    default=16,
     help="number of decentralized nodes",
 )
 parser.add_argument(
@@ -74,7 +74,7 @@ parser.add_argument(
 parser.add_argument(
     "--grad_acc",
     type=int,
-    default=8,
+    default=2,
 )
 parser.add_argument(
     "--sorter",
@@ -116,24 +116,23 @@ cur_rank = dist.get_rank() if args.distributed else 0
 args.rank = cur_rank
 
 dtype = torch.float32
+
+# set corresponding device id for each worker
 if args.node_cnt == torch.cuda.device_count():
-    print_rank_0(cur_rank, "Running one process per GPU")
     args.dev_id = cur_rank
 else:
     assert (args.node_cnt % torch.cuda.device_count() == 0) or args.node_cnt <= torch.cuda.device_count()
     args.dev_id = cur_rank % torch.cuda.device_count()
-    print(f"Process {cur_rank} is running on cuda:{args.dev_id}")
 device = torch.device(f'cuda:{args.dev_id}')
+torch.cuda.set_device(args.dev_id)
 setattr(args, "use_cuda", device != torch.device("cpu"))
 
-eventTimer = EventTimer(device=device)
 
+eventTimer = EventTimer(device=device)
 graph: Graph = CentralizedGraph(args.node_cnt, cur_rank, args.world)
 protocol = CentralizedProtocol(graph.rank, args.node_cnt)
 
-torch.cuda.set_device(args.dev_id)
-torch.cuda.empty_cache()
-print_rank_0(vars(args))
+print_rank_0(cur_rank, vars(args))
 seed_everything(args.seed)
 
 exp_config = get_glue_config(args, args.seed)
@@ -152,36 +151,25 @@ sorter = {
     "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
     "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
     "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
-    "I-PB": lambda: D_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
+    "I-PB": lambda: I_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
                                   d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
 
-exp_details = f"{args.task_name}-sorter-{args.sorter}-node-{args.node_cnt}-lr-{args.lr}-train-B-{args.train_B}-grad_acc-{args.grad_acc}-seed-{args.seed}"
+counter = tqdm(range(d_data.indices.individual_batch_cnt * args.epochs), miniters=100)
 
-print_rank_0(exp_details)
-counter = tqdm(range(d_data.indices.individual_batch_cnt *
-               args.epochs), miniters=100)
-
-local_train_loss = []
-global_test_acc = []
-global_train_acc = []
-full_train_losses = []
 for e in range(args.epochs):
     dist.barrier()
     print_rank_0(cur_rank, vars(args))
-    local_train_loss.append(
-        d_bert_train(d_data, sgd, d_model, sorter, e, counter,
-                        args, eventTimer, grad_acc=args.grad_acc)
-    )
+    d_bert_train(d_data, sgd, d_model, sorter, e, counter,
+                    args, eventTimer, grad_acc=args.grad_acc)
+
     dist.barrier()
 
-    full_train_loss, train_acc = d_full_train_loss(
+    d_full_train_loss(
         exp_config, d_data.trainloader, d_model, cur_rank, device
     )
-    full_train_losses.append(full_train_loss)
-    global_train_acc.append(train_acc)
     dist.barrier()
-    global_avg_test_score = d_bert_test(
+    
+    d_bert_test(
         d_data.testloader, d_model, e, exp_config, cur_rank, device=device)
     dist.barrier()
-    global_test_acc.append(global_avg_test_score)

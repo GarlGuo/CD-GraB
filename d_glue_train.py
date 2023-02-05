@@ -16,7 +16,8 @@ from torch.utils.data import DataLoader
 from d_model import *
 from d_utils import *
 from tqdm.auto import tqdm
-from d_algo import flatten_grad
+from d_algo import flatten_grad, D_Sorter
+
 
 
 def get_glue_config(args, seed=0):
@@ -81,7 +82,12 @@ def get_glue_config(args, seed=0):
 def d_bert_train(glue_data: D_GLUE_Embeddings,
                      optimizer: torch.optim.Optimizer,
                      c_bert: D_Model,
-                     sorter, epoch, counter, args, eventTimer: EventTimer, grad_acc):
+                     sorter: D_Sorter, 
+                     epoch: int, 
+                     counter, 
+                     args, 
+                     eventTimer: EventTimer, 
+                     grad_acc: int):
     c_bert.eval()  # disable dropout
     with eventTimer(f"epoch-{epoch}"):
         with eventTimer("sorter_sort"):
@@ -127,60 +133,9 @@ def d_bert_train(glue_data: D_GLUE_Embeddings,
                   glue_data.indices.individual_batch_cnt, cur_loss.item() / batch))
     return cur_loss / glue_data.indices.individual_batch_cnt
 
-def d_bert_train_noGradAcc(glue_data: D_GLUE_Embeddings,
-                     optimizer: torch.optim.Optimizer,
-                     c_bert: D_Model,
-                     sorter, epoch, counter, args, eventTimer: EventTimer, grad_acc):
-    assert args.grad_acc == 1 and grad_acc == 1
-
-    c_bert.eval()  # disable dropout
-    with eventTimer("sorter_sort"):
-        perm_list = sorter.sort()
-    cur_loss = 0
-
-    print_rank_0(args.rank, f"Number of batches: {glue_data.indices.individual_batch_cnt}")
-    for batch in range(glue_data.indices.individual_batch_cnt):
-        embeddings, labels = glue_data[perm_list[batch]]
-        optimizer.zero_grad()
-
-        with eventTimer("everything"):
-            with eventTimer("forward_pass"):
-                loss = c_bert(embeddings, labels=labels)
-
-            with eventTimer("backward"):
-                loss.backward()
-
-            with eventTimer("communicate_grad"):
-                if args.sorter == "d-onlinebalance":
-                    sorter.all_gather_grad(optimizer)
-                    avg_grad = torch.mean(sorter.gathered_grad, 1, dtype=torch.float32) 
-                else:
-                    local_grad = flatten_grad(optimizer)
-                    dist.all_reduce(local_grad)
-                    avg_grad = local_grad / args.node_cnt
-
-            with eventTimer("sorter_step"):
-                sorter.step(optimizer, batch)
-
-            with eventTimer("SGD_step"):
-                grad_i = 0
-                for p in c_bert.parameters():
-                    if p.requires_grad:
-                        p.grad.copy_(avg_grad[grad_i: grad_i + p.grad.numel()].view(p.grad.size()))
-                        grad_i += p.grad.numel()
-                optimizer.step()
-
-        if args.rank == 0:
-            counter.update(1)
-        cur_loss += loss.detach()
-
-        if batch > 0 and batch % args.log_interval == 0 and args.rank == 0:
-            print('| epoch {:3d} | {:5d}/{:5d} batches | loss {:.3f}'.format(epoch, batch,
-                  glue_data.indices.individual_batch_cnt, cur_loss.item() / batch))
-    return cur_loss / glue_data.indices.individual_batch_cnt
 
 @torch.no_grad()
-def evaluate_one_model(model, testloader, exp_config, device=None):
+def evaluate_one_model(model: nn.Module, testloader: DataLoader, exp_config, device=None):
     model.eval()
     metric = load_metric("glue", exp_config["task_name"])
     for embeddings, labels in testloader:
@@ -208,7 +163,7 @@ def d_bert_test(testloader: DataLoader, c_bert: D_Model, epoch: int, exp_config,
 
 
 @torch.no_grad()
-def d_full_train_loss(exp_config, trainloader, c_bert: D_Model, rank, device=None):
+def d_full_train_loss(exp_config, trainloader: DataLoader, c_bert: D_Model, rank, device=None):
     c_bert.eval()  # disable dropout
     cur_loss = 0
     metric = load_metric("glue", exp_config["task_name"])

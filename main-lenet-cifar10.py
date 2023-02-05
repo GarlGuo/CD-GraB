@@ -126,11 +126,8 @@ setattr(args, "use_cuda", device != torch.device("cpu"))
 eventTimer = EventTimer(device=device)
 
 graph: Graph = CentralizedGraph(args.node_cnt, cur_rank, args.world)
-W = graph.get_W()
-P = graph.get_P()
 protocol = CentralizedProtocol(graph.rank, args.node_cnt)
 torch.cuda.set_device(args.dev_id)
-print_rank_0(cur_rank, f'W: {W}')
 seed_everything(args.seed)
 
 d_data = D_CIFAR10(args.node_cnt, train_B=args.train_B, test_B=args.test_B, device=device, d_dataset_format=partitioned_dset_maker, args=args)
@@ -145,7 +142,7 @@ sorter = {
     "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
     "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
     "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
-    "I-PB": lambda: D_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
+    "I-PB": lambda: I_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
         d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
 

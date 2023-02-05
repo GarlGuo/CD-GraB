@@ -125,7 +125,7 @@ class D_RandomReshuffling(D_Sorter):
         return super().sort()
 
 
-class D_PairBalance(D_Sorter):
+class I_PairBalance(D_Sorter):
     def __init__(self, rank: int, m: int, n: int, d: int, device=None):
         def sort_maker(): return PairBalance_Sorter(m, d, device=device)
         super().__init__(rank, n, sort_maker)
