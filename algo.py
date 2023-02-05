@@ -6,11 +6,11 @@ from utils import flatten_grad
 import numpy as np
 
 
-class Sort:
+class Sorter:
     def sort(self):
         raise NotImplementedError()
 
-class GreedySort(Sort):
+class GreedySort(Sorter):
     def __init__(self,
                 args,
                 num_batches,
@@ -99,7 +99,7 @@ class GreedySort(Sort):
         orders = {k: v for k, v in sorted(orders.items(), key=lambda item: item[1], reverse=False)}
         return orders
         
-class FreshGradGreedySort(Sort):
+class FreshGradGreedySort(Sorter):
     def __init__(self,
                 args,
                 num_batches,
@@ -188,7 +188,7 @@ class FreshGradGreedySort(Sort):
         orders = {k: v for k, v in sorted(orders.items(), key=lambda item: item[1], reverse=False)}
         return orders
 
-class ZerothOrderGreedySort(Sort):
+class ZerothOrderGreedySort(Sorter):
     def __init__(self,
                 args,
                 num_batches,
@@ -277,7 +277,7 @@ class ZerothOrderGreedySort(Sort):
         orders = {k: v for k, v in sorted(orders.items(), key=lambda item: item[1], reverse=False)}
         return orders
 
-class GraB(Sort):
+class GraB(Sorter):
     def __init__(self,
                 args,
                 num_batches,
@@ -317,7 +317,7 @@ class GraB(Sort):
             self.cur_sum.add_(-1 * cur_grad)
 
 
-class FlipFlopSort(Sort):
+class FlipFlopSort(Sorter):
     def __init__(self,
                 args,
                 num_batches,
@@ -339,7 +339,7 @@ class FlipFlopSort(Sort):
         return self.orders
 
 
-class RandomShuffle(Sort):
+class RandomShuffle(Sorter):
     def __init__(self, num_batches) -> None:
         super().__init__()
         self.num_batches = num_batches
@@ -351,7 +351,7 @@ class RandomShuffle(Sort):
         return [i for i in torch.randperm(self.num_batches)]
 
 
-class IncrementGradient(Sort):
+class IncrementGradient(Sorter):
     def __init__(self, num_batches) -> None:
         super().__init__()
         self.num_batches = num_batches
@@ -363,7 +363,7 @@ class IncrementGradient(Sort):
         return {i: 0 for i in range(self.num_batches)}
 
 
-class ShuffleOnce(Sort):
+class ShuffleOnce(Sorter):
     def __init__(self, num_batches, seed) -> None:
         super().__init__()
         self.num_batches = num_batches
@@ -377,7 +377,7 @@ class ShuffleOnce(Sort):
         return {i.item(): 0 for i in torch.randperm(self.num_batches, generator=torch.manual_seed(self.seed))}
 
 
-class WithReplacement_Sorter(Sort):
+class WithReplacement_Sorter(Sorter):
     def __init__(self, num_batches) -> None:
         super().__init__()
         self.num_batches = num_batches
@@ -390,7 +390,7 @@ class WithReplacement_Sorter(Sort):
         return torch.randint(0, self.num_batches, size=(self.num_batches,))
 
 
-class PairBalance_Sorter(Sort):
+class PairBalance_Sorter(Sorter):
     def __init__(self, n:int, d:int, device=None):
         assert n % 2 == 0, "pair balance only supports even number"
         self.pair_diff = torch.zeros(d, device=device)

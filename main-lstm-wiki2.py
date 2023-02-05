@@ -176,13 +176,13 @@ n = node_cnt
 d = sum(p.numel() for p in c_model.parameters() if p.requires_grad)
 
 sorter = {
-    "d-onlinebalance": lambda: CReal_GraB_OnlinePairBalance(args.rank, args, n=args.node_cnt, m=len(d_data),
+    "d-onlinebalance": lambda: D_GraB_PairBalance(args.rank, args, n=args.node_cnt, m=len(d_data),
                                                             d=sum(p.numel() for p in c_model.parameters() if p.requires_grad), device=device),
-    "d-grab": lambda: CReal_GraB_naive(args.rank, args, n=args.node_cnt, m=len(d_data),
+    "d-grab": lambda: I_Balance(args.rank, args, n=args.node_cnt, m=len(d_data),
                                        d=sum(p.numel() for p in c_model.parameters() if p.requires_grad), device=device),
-    "d-rr": lambda: CReal_RR(args.rank, args.node_cnt, len(d_data)),
+    "d-rr": lambda: D_RR(args.rank, args.node_cnt, len(d_data)),
     "d-with-r": lambda: CReal_WithR(args.rank, args.node_cnt, len(d_data)),
-    "d-ind-pairb": lambda: CReal_ind_pairb(args.rank, args, m=len(d_data), n=args.node_cnt,
+    "d-ind-pairb": lambda: D_PairBalance(args.rank, args, m=len(d_data), n=args.node_cnt,
                                            d=sum(p.numel() for p in c_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
 

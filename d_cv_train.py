@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from typing import List
-from algo import Sort
+from algo import Sorter
 from d_data import *
 from d_model import DReal_Model
 from d_utils import *
@@ -13,7 +13,7 @@ from tqdm import tqdm
 def cReal_cv_train(d_trainset: DReal_VisionData, 
           optimizer: torch.optim.Optimizer, 
           model: DReal_Model, 
-          sorter: Sort, criterion: nn.Module, 
+          sorter: Sorter, criterion: nn.Module, 
           epoch, counter, args, eventTimer: EventTimer, grad_acc=8):
     assert grad_acc != None and grad_acc > 1 # This method is not optimized for grad_acc = 1
     model.train()
@@ -63,7 +63,7 @@ def cReal_cv_train(d_trainset: DReal_VisionData,
 def cReal_cv_train_noGradAcc(d_trainset: DReal_VisionData, 
           optimizer: torch.optim.Optimizer, 
           model: DReal_Model, 
-          sorter: Sort, criterion: nn.Module, 
+          sorter: Sorter, criterion: nn.Module, 
           epoch, counter, args, eventTimer: EventTimer):
     """
     This train method only applies to no gradient accumulation, minimizing communication
