@@ -7,7 +7,7 @@ parser.add_argument("--d", type=int, required=True, help="worker model params")
 parser.add_argument("--m", type=int, required=True,
                     help="number of examples per worker")
 parser.add_argument("--n", type=int, required=True, help="number of worker")
-parser.add_argument("--r", type=int, default=5, help="number of trials")
+parser.add_argument("--trials", type=int, default=5, help="number of trials")
 parser.add_argument("--round", type=int, default=15,
                     help="number of reorder rounds")
 args = parser.parse_args()
@@ -44,11 +44,11 @@ def sign_reorder(signs, single_vecs):
     return next_vecs
 
 
-def Balance(single_vecs):
-    # single_vecs: mn, d
-    run_sum = np.zeros_like(single_vecs[0])
-    signs = np.zeros((len(single_vecs),), dtype=np.int8)
-    for i, vec in enumerate(single_vecs):
+def Balance(centralized_vecs):
+    # centralized_vecs: mn, d
+    run_sum = np.zeros_like(centralized_vecs[0])
+    signs = np.zeros((len(centralized_vecs),), dtype=np.int8)
+    for i, vec in enumerate(centralized_vecs):
         if np.linalg.norm(run_sum + vec, ord=2) <= np.linalg.norm(run_sum - vec, ord=2):
             signs[i] = +1
             run_sum += vec
@@ -58,19 +58,19 @@ def Balance(single_vecs):
     return signs
 
 
-def Centralized_Balance_multiround(single_vecs, round):
+def Centralized_Balance_multiround(centralized_vecs, round):
     herding_bounds = []
-    # single_vecs: mn, d
-    herding_bounds.append(herding_bound(single_vecs))  # zero round
+    # centralized_vecs: mn, d
+    herding_bounds.append(herding_bound(centralized_vecs))  # zero round
     for _ in range(round):
-        signs = Balance(single_vecs)
-        single_vecs = sign_reorder(signs, single_vecs)
-        herding_bounds.append(herding_bound(single_vecs))
+        signs = Balance(centralized_vecs)
+        centralized_vecs = sign_reorder(signs, centralized_vecs)
+        herding_bounds.append(herding_bound(centralized_vecs))
     return herding_bounds
 
 
 def Independent_Balance(vecs):
-    # vecs: m, n, d
+    # decentralized_vecs: m, n, d
     m, n, d = vecs.shape
     signs = np.zeros((m, n), dtype=np.int8)
     for j in range(n):
@@ -89,7 +89,7 @@ def Independent_reorder(signs, vecs):
 
 def Independent_Balance_multiround(vecs, round):
     herding_bounds = []
-    # vecs: m, n, d
+    # decentralized_vecs: m, n, d
     herding_bounds.append(parallel_herding_bound(vecs))  # zero round
     for _ in range(round):
         signs = Independent_Balance(vecs)
@@ -99,7 +99,7 @@ def Independent_Balance_multiround(vecs, round):
 
 
 def D_GraB_and_reorder(vecs):
-    # vecs: m, n, d
+    # decentralized_vecs: m, n, d
     m, n, d = vecs.shape
     mn = m * n
     run_sum = np.zeros((d,))
@@ -126,7 +126,7 @@ def D_GraB_and_reorder(vecs):
 
 def D_GraB_multiround(vecs, round):
     herding_bounds = []
-    # vecs: m, n, d
+    # decentralized_vecs: m, n, d
     herding_bounds.append(parallel_herding_bound(vecs))
     for _ in range(round):
         vecs = D_GraB_and_reorder(vecs)
@@ -135,7 +135,7 @@ def D_GraB_multiround(vecs, round):
 
 
 def Centralized_PairBalance(vecs):
-    # vecs: mn d
+    # centralized_vecs: mn d
     mn, d = vecs.shape
     run_sum = np.zeros((d,))
 
@@ -158,49 +158,47 @@ def Centralized_PairBalance(vecs):
     return next_epoch_vecs
 
 
-def Centralized_PairBalance_multiround(vecs, round):
+def Centralized_PairBalance_multiround(centralized_vecs, round):
     herding_bounds = []
-    # vecs: mn, d
-    herding_bounds.append(herding_bound(vecs))
+    # centralized_vecs: mn, d
+    herding_bounds.append(herding_bound(centralized_vecs))
     for _ in range(round):
-        vecs = Centralized_PairBalance(vecs)
-        herding_bounds.append(herding_bound(vecs))
+        centralized_vecs = Centralized_PairBalance(centralized_vecs)
+        herding_bounds.append(herding_bound(centralized_vecs))
     return herding_bounds
 
 
-def Independent_PairBalance_multiround(vecs, round):
+def Independent_PairBalance_multiround(decentralized_vecs, round):
     herding_bounds = []
-    # vecs: m, n, d
-    herding_bounds.append(parallel_herding_bound(vecs))  # zero round
+    # decentralized_vecs: m, n, d
+    herding_bounds.append(parallel_herding_bound(decentralized_vecs))  # zero round
     for _ in range(round):
+        # doing PB on each worker individually
         for i in range(n):
-            vecs[:, i, :] = Centralized_PairBalance(vecs[:, i, :])
-        herding_bounds.append(parallel_herding_bound(vecs))
+            decentralized_vecs[:, i, :] = Centralized_PairBalance(decentralized_vecs[:, i, :])
+        herding_bounds.append(parallel_herding_bound(decentralized_vecs))
     return herding_bounds
 
 
-C_B_herding_values = []
-I_B_herding_values = []
-D_GraB_herding_values = []
-C_PB_herding_values = []
-I_PB_herding_values = []
-
-for i in range(args.r):
+for i in range(1, args.trials + 1):
+    print(f'Trial {i} starts!')
     decentralized_vecs = np.random.RandomState(i).randn(mn, d)
     decentralized_vecs = decentralized_vecs / np.linalg.norm(decentralized_vecs, ord=2, axis=1).reshape(mn, 1)
     decentralized_vecs = decentralized_vecs.reshape(m, n, d)
     decentralized_vecs -= np.expand_dims(decentralized_vecs.mean(axis=0), 0)
 
     centralized_vecs = decentralized_vecs.reshape(mn, d)
-    C_B_herding_values.append(
-        Centralized_Balance_multiround(centralized_vecs, rounds))
-    I_B_herding_values.append(
-        Independent_Balance_multiround(decentralized_vecs, rounds))
-    D_GraB_herding_values.append(
-        D_GraB_multiround(decentralized_vecs, rounds))
-    C_PB_herding_values.append(
-        Centralized_PairBalance_multiround(centralized_vecs, rounds))
-    I_PB_herding_values.append(
-        Independent_PairBalance_multiround(decentralized_vecs, rounds)
-    )
-    del decentralized_vecs
+
+    C_B_herding_bounds = Centralized_Balance_multiround(centralized_vecs, rounds)
+    C_PB_herding_bounds = Centralized_PairBalance_multiround(centralized_vecs, rounds)
+
+    print(f'C-B herding bounds {C_B_herding_bounds}')
+    print(f'C-PB herding bounds {C_PB_herding_bounds}')
+
+    D_GraB_herding_bounds = D_GraB_multiround(decentralized_vecs, rounds)
+    I_B_herding_bounds = Independent_Balance_multiround(decentralized_vecs, rounds)
+    I_PB_herding_bounds = Independent_PairBalance_multiround(decentralized_vecs, rounds)
+    
+    print(f'D-GraB herding bounds {D_GraB_herding_bounds}')
+    print(f'I-B herding bounds {I_B_herding_bounds}')
+    print(f'I-PB herding bounds {I_PB_herding_bounds}')

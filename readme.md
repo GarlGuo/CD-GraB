@@ -14,11 +14,31 @@ CUDA >= 10.1 on linux
 
 ### LR with BERT embeddings on GLUE tasks
 
+Please run 
+```
+  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lr-glue.py --node_cnt 16 --lr 1e-4 --epochs 30 --grad_acc 2 --sorter D-GraB --backend gloo
+```
+
 ### LeNet on CIFAR10
+
+Please run 
+```
+  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lenet-cifar10.py --node_cnt 16 --lr 1e-3 --epochs 100 --grad_acc 2 --sorter D-GraB --backend gloo
+```
 
 ### LSTM on Wiki2
 
+Please run 
+```
+  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lstm-wiki2.py --node_cnt 16 --lr 10.0 --epochs 30 --grad_acc 2 --sorter D-GraB --backend gloo
+```
+
 ### Random vectors simulation on herding bound
+
+Please run 
+```
+  python herding_bound_simulation.py --d 1000 --m 10000 --n 100
+```
 
 
 # Authors
