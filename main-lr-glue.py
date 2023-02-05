@@ -2,7 +2,7 @@ import torch
 import torch.distributed as dist
 from d_glue_train import *
 from d_data import *
-from dReal_topology import *
+from d_topology import *
 from d_model import *
 from d_algo import *
 from tqdm.auto import tqdm
@@ -79,13 +79,12 @@ parser.add_argument(
 parser.add_argument(
     "--sorter",
     type=str,
-    default="d-rr",
+    default="D-GraB",
     choices=[
-        "d-onlinebalance",
-        "d-grab",
-        "d-rr",
-        "d-with-r",
-        "d-ind-pairb"
+        "D-GraB",
+        "I-B",
+        "D-RR",
+        "I-PB"
     ]
 )
 parser.add_argument("--epochs", type=int, default=30,
@@ -140,9 +139,9 @@ seed_everything(args.seed)
 exp_config = get_glue_config(args, args.seed)
 bert_model = lambda: BERT_model_maker(args, exp_config, args.seed, device)[0]
 
-d_data = CReal_GLUE_Embeddings(
+d_data = D_GLUE_Embeddings(
     args, exp_config, args.node_cnt, bert_model, device=device)
-d_model = DReal_Model(graph.rank, args.node_cnt, protocol,
+d_model = D_Model(graph.rank, args.node_cnt, protocol,
                       (lambda: BERT_LinearHead(exp_config['num_labels'], device, args.seed)))
 sgd = torch.optim.SGD(d_model.model.classifier.parameters(), lr=args.lr,
                       momentum=args.momentum, weight_decay=args.weight_decay)
@@ -150,19 +149,15 @@ del bert_model
 
 args.d = sum(p.numel() for p in d_model.parameters() if p.requires_grad)
 sorter = {
-    "d-onlinebalance": (lambda: D_GraB_PairBalance(args.rank, args, n=args.node_cnt, m=len(d_data), d=args.d, device=device)) 
-        if args.grad_acc != None and args.grad_acc > 1
-        else (lambda: CReal_GraB_OnlinePairBalance_noGradAcc(args.rank, args, n=args.node_cnt, m=len(d_data), d=args.d, device=device)),
-    "d-grab": lambda: I_Balance(args.rank, args, n=args.node_cnt, m=len(d_data),
-                                       d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device),
-    "d-rr": lambda: D_RR(args.rank, args.node_cnt, len(d_data)),
-    "d-with-r": lambda: CReal_WithR(args.rank, args.node_cnt, len(d_data)),
-    "d-ind-pairb": lambda: D_PairBalance(args.rank, args, m=len(d_data), n=args.node_cnt,
-                                           d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
+    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
+    "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
+    "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
+    "I-PB": lambda: D_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
+                                  d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
 
 exp_details = f"{args.task_name}-sorter-{args.sorter}-node-{args.node_cnt}-lr-{args.lr}-train-B-{args.train_B}-grad_acc-{args.grad_acc}-seed-{args.seed}"
-basic_dir = f'real-results{os.sep}glue'
+
 print_rank_0(exp_details)
 counter = tqdm(range(d_data.indices.individual_batch_cnt *
                args.epochs), miniters=100)
@@ -174,29 +169,19 @@ full_train_losses = []
 for e in range(args.epochs):
     dist.barrier()
     print_rank_0(cur_rank, vars(args))
-    if args.grad_acc == 1 or args.grad_acc == None:
-        print_rank_0(cur_rank, "Running noGradAcc optimized trainer")
-        local_train_loss.append(
-            cReal_bert_train_noGradAcc(d_data, sgd, d_model, sorter, e, counter,
-                            args, eventTimer, grad_acc=args.grad_acc)
-        )
-    else:
-        print_rank_0(cur_rank, "Running regular trainer")
-        local_train_loss.append(
-            cReal_bert_train(d_data, sgd, d_model, sorter, e, counter,
-                            args, eventTimer, grad_acc=args.grad_acc)
-        )
+    local_train_loss.append(
+        d_bert_train(d_data, sgd, d_model, sorter, e, counter,
+                        args, eventTimer, grad_acc=args.grad_acc)
+    )
     dist.barrier()
 
-    full_train_loss, train_acc = cReal_full_train_loss(
+    full_train_loss, train_acc = d_full_train_loss(
         exp_config, d_data.trainloader, d_model, cur_rank, device
     )
     full_train_losses.append(full_train_loss)
     global_train_acc.append(train_acc)
     dist.barrier()
-    global_avg_test_score = cReal_bert_test(
+    global_avg_test_score = d_bert_test(
         d_data.testloader, d_model, e, exp_config, cur_rank, device=device)
     dist.barrier()
     global_test_acc.append(global_avg_test_score)
-
-dist.barrier()

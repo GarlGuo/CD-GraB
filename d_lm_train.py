@@ -14,9 +14,9 @@ def repackage_hidden(h):
         return tuple(repackage_hidden(v) for v in h)
 
 
-def cReal_LM_train(c_data: DReal_LM_Dataset,
+def d_LM_train(c_data: D_LM_Dataset,
                    optimizer: Optimizer,
-                   lm_model: DReal_Model,
+                   lm_model: D_Model,
                    sorter, epoch, counter, args, eventTimer: EventTimer,
                    device, criterion=nn.NLLLoss()):
     lm_model.train()
@@ -92,7 +92,7 @@ def evaluate_one_model(model, dataset):
 
 
 @torch.no_grad()
-def dReal_LM_test(eval_dataset, d_lm_model: DReal_Model, epoch: int, rank):
+def d_LM_test(eval_dataset, d_lm_model: D_Model, epoch: int):
     d_lm_model.eval()
     global_avg_model = d_lm_model.model
     global_avg_model.eval()

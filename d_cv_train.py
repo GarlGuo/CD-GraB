@@ -4,18 +4,17 @@ from torch.utils.data import DataLoader
 from typing import List
 from algo import Sorter
 from d_data import *
-from d_model import DReal_Model
+from d_model import D_Model
 from d_utils import *
 from d_eventTimer import EventTimer
 from d_algo import flatten_grad
 from tqdm import tqdm
 
-def cReal_cv_train(d_trainset: DReal_VisionData, 
+def d_cv_train(d_trainset: D_VisionData, 
           optimizer: torch.optim.Optimizer, 
-          model: DReal_Model, 
+          model: D_Model, 
           sorter: Sorter, criterion: nn.Module, 
           epoch, counter, args, eventTimer: EventTimer, grad_acc=8):
-    assert grad_acc != None and grad_acc > 1 # This method is not optimized for grad_acc = 1
     model.train()
     with eventTimer("sorter_sort"): 
         perm_list = sorter.sort()
@@ -60,66 +59,9 @@ def cReal_cv_train(d_trainset: DReal_VisionData,
             
     return cur_loss / len(d_trainset)
 
-def cReal_cv_train_noGradAcc(d_trainset: DReal_VisionData, 
-          optimizer: torch.optim.Optimizer, 
-          model: DReal_Model, 
-          sorter: Sorter, criterion: nn.Module, 
-          epoch, counter, args, eventTimer: EventTimer):
-    """
-    This train method only applies to no gradient accumulation, minimizing communication
-    overhead for online pair balance.
-    """
-    assert args.grad_acc == 1
-    
-    model.train()
-    with eventTimer("sorter_sort"): 
-        perm_list = sorter.sort()
-
-    cur_loss = 0
-    print_rank_0(args.rank, f"Number of batches: {len(d_trainset)}")
-    for batch in range(len(d_trainset)):
-        X, Y = d_trainset[perm_list[batch]]
-        
-        optimizer.zero_grad()
-        with eventTimer("everything"):
-            with eventTimer("forward_pass"):
-                Y_hat = model(X)
-                loss = criterion(i=None, Y_hat=Y_hat, Y=Y.to(torch.int64))
-
-            with eventTimer("backward"):
-                loss.backward()
-
-            with eventTimer("communicate_grad"):
-                if args.sorter == "d-onlinebalance":
-                    sorter.all_gather_grad(optimizer)
-                    avg_grad = torch.mean(sorter.gathered_grad, 1, dtype=torch.float32) 
-                else:
-                    local_grad = flatten_grad(optimizer)
-                    dist.all_reduce(local_grad)
-                    avg_grad = local_grad / args.node_cnt
-
-            with eventTimer("sorter_step"):
-                sorter.step(optimizer, batch)
-
-            # Update model with gathered gradients
-            with eventTimer("SGD_step"):
-                grad_i = 0
-                for p in model.parameters():
-                    if p.requires_grad:
-                        p.grad.copy_(avg_grad[grad_i: grad_i + p.grad.numel()].view(p.grad.size()))
-                        grad_i += p.grad.numel()
-                optimizer.step()
-
-        if args.rank == 0:
-            counter.update(1)
-        cur_loss += loss.detach()
-        if batch > 0 and batch % args.log_interval == 0 and args.rank == 0:
-            print('| epoch {:3d} | {:5d}/{:5d} batches | loss {:.3f}'.format(epoch, batch, len(d_trainset), cur_loss.item() / (batch+1)))
-            
-    return cur_loss / len(d_trainset)
 
 @torch.no_grad()
-def cReal_cv_test(testloader: DataLoader, d_cv_model: DReal_Model, epoch: int, rank, device=None, dtype=torch.float32):
+def d_cv_test(testloader: DataLoader, d_cv_model: D_Model, epoch: int, rank, device=None, dtype=torch.float32):
     d_cv_model.eval() 
     global_cv_model: nn.Module = d_cv_model.get_global_averaged_model()
     if rank == 0:
@@ -140,7 +82,7 @@ def cReal_cv_test(testloader: DataLoader, d_cv_model: DReal_Model, epoch: int, r
 
 
 @torch.no_grad()
-def cReal_cv_full_train_loss(rank, trainloader: DataLoader, d_cv_model, criterion, device=None, dtype=torch.float32):
+def d_cv_full_train_loss(rank, trainloader: DataLoader, d_cv_model, criterion, device=None, dtype=torch.float32):
     if rank == 0:
         d_cv_model.eval() 
         counter = tqdm(range(len(trainloader)))

@@ -78,9 +78,9 @@ def get_glue_config(args, seed=0):
     }
 
 
-def cReal_bert_train(glue_data: CReal_GLUE_Embeddings,
+def d_bert_train(glue_data: D_GLUE_Embeddings,
                      optimizer: torch.optim.Optimizer,
-                     c_bert: DReal_Model,
+                     c_bert: D_Model,
                      sorter, epoch, counter, args, eventTimer: EventTimer, grad_acc):
     c_bert.eval()  # disable dropout
     with eventTimer(f"epoch-{epoch}"):
@@ -127,9 +127,9 @@ def cReal_bert_train(glue_data: CReal_GLUE_Embeddings,
                   glue_data.indices.individual_batch_cnt, cur_loss.item() / batch))
     return cur_loss / glue_data.indices.individual_batch_cnt
 
-def cReal_bert_train_noGradAcc(glue_data: CReal_GLUE_Embeddings,
+def d_bert_train_noGradAcc(glue_data: D_GLUE_Embeddings,
                      optimizer: torch.optim.Optimizer,
-                     c_bert: DReal_Model,
+                     c_bert: D_Model,
                      sorter, epoch, counter, args, eventTimer: EventTimer, grad_acc):
     assert args.grad_acc == 1 and grad_acc == 1
 
@@ -197,7 +197,7 @@ def evaluate_one_model(model, testloader, exp_config, device=None):
 
 
 @torch.no_grad()
-def cReal_bert_test(testloader: DataLoader, c_bert: DReal_Model, epoch: int, exp_config, rank, device=None):
+def d_bert_test(testloader: DataLoader, c_bert: D_Model, epoch: int, exp_config, rank, device=None):
     c_bert.eval()
     if rank == 0:
         avg_bert_model = c_bert.model
@@ -208,7 +208,7 @@ def cReal_bert_test(testloader: DataLoader, c_bert: DReal_Model, epoch: int, exp
 
 
 @torch.no_grad()
-def cReal_full_train_loss(exp_config, trainloader, c_bert: DReal_Model, rank, device=None):
+def d_full_train_loss(exp_config, trainloader, c_bert: D_Model, rank, device=None):
     c_bert.eval()  # disable dropout
     cur_loss = 0
     metric = load_metric("glue", exp_config["task_name"])

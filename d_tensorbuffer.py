@@ -4,7 +4,7 @@ from typing import Union, Sequence
 from d_utils import *
 
 
-class DReal_TensorBuffer:
+class D_TensorBuffer:
     def __init__(self, rank, world_size, tensors: Union[Sequence[torch.Tensor], torch.Tensor], protocol: Protocol):
         self.rank = rank
         self.world_size = world_size

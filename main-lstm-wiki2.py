@@ -89,13 +89,12 @@ parser.add_argument(
 parser.add_argument(
     "--sorter",
     type=str,
-    default="d-onlinebalance",
+    default="D-GraB",
     choices=[
-        "d-onlinebalance",
-        "d-grab",
-        "d-rr",
-        "d-with-r",
-        "d-ind-pairb"
+        "D-GraB",
+        "I-B",
+        "D-RR",
+        "I-PB"
     ]
 )
 parser.add_argument("--epochs", type=int, default=50,
@@ -153,7 +152,7 @@ dtype = torch.int64
 
 eventTimer = EventTimer(device=device)
 
-d_data = DReal_LM_Dataset(
+d_data = D_LM_Dataset(
     args, args.node_cnt, f'data{os.sep}wikitext-2', device=device)
 
 
@@ -164,7 +163,7 @@ def model_maker():
     )
 
 
-c_model = DReal_Model(graph.rank, args.node_cnt, protocol, model_maker)
+c_model = D_Model(graph.rank, args.node_cnt, protocol, model_maker)
 sgd = torch.optim.SGD(c_model.parameters(), lr=args.lr,
                       momentum=args.momentum, weight_decay=args.weight_decay)
 
@@ -176,19 +175,14 @@ n = node_cnt
 d = sum(p.numel() for p in c_model.parameters() if p.requires_grad)
 
 sorter = {
-    "d-onlinebalance": lambda: D_GraB_PairBalance(args.rank, args, n=args.node_cnt, m=len(d_data),
-                                                            d=sum(p.numel() for p in c_model.parameters() if p.requires_grad), device=device),
-    "d-grab": lambda: I_Balance(args.rank, args, n=args.node_cnt, m=len(d_data),
-                                       d=sum(p.numel() for p in c_model.parameters() if p.requires_grad), device=device),
-    "d-rr": lambda: D_RR(args.rank, args.node_cnt, len(d_data)),
-    "d-with-r": lambda: CReal_WithR(args.rank, args.node_cnt, len(d_data)),
-    "d-ind-pairb": lambda: D_PairBalance(args.rank, args, m=len(d_data), n=args.node_cnt,
-                                           d=sum(p.numel() for p in c_model.parameters() if p.requires_grad), device=device)
+    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
+    "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
+    "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
+    "I-PB": lambda: D_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
+        d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
 
-
 exp_details = f"{args.sorter}-node-{args.node_cnt}-lr-{args.lr}-train-B-{args.train_B}-seed-{args.seed}"
-basic_dir = f"real-results{os.sep}lstm-wiki2"
 
 counter = tqdm(range(len(d_data) * args.epochs), miniters=100)
 global_test_ppls, global_val_ppls, global_train_val_ppls = [], [], []
@@ -197,37 +191,20 @@ local_train_losses = []
 seed_everything(args.seed)
 for e in range(1, args.epochs + 1):
     dist.barrier()
-    local_train_loss = cReal_LM_train(d_data, sgd, c_model, sorter, e,
+    local_train_loss = d_LM_train(d_data, sgd, c_model, sorter, e,
                                       counter, args, eventTimer, device)
     local_train_losses.append(local_train_loss)
 
     print_rank_0(cur_rank, "validation on training dataset")
     dist.barrier()
-    global_avg_train_val_ppl = dReal_LM_test(
+    global_avg_train_val_ppl = d_LM_test(
         d_data.trainset_eval, c_model, e, args.rank)
 
     print_rank_0(cur_rank, "validation on testing dataset")
     dist.barrier()
-    global_avg_test_ppl = dReal_LM_test(
+    global_avg_test_ppl = d_LM_test(
         d_data.test_dataset, c_model, e, args.rank)
 
     global_train_val_ppls.append(global_avg_train_val_ppl)
     global_test_ppls.append(global_avg_test_ppl)
     lr_scheduler.step(global_avg_train_val_ppl)
-
-if cur_rank == 0:
-    global_test_ppls = torch.as_tensor(global_test_ppls)
-    global_train_val_ppls = torch.as_tensor(global_train_val_ppls)
-
-eventTimer.save_results(
-    f'{basic_dir}{os.sep}{exp_details}__eventTimer{cur_rank}.pt')
-torch.save(
-    local_train_losses, f"real-results{os.sep}glue{os.sep}local-train-loss-rank-{cur_rank}-{exp_details}.pt"
-)
-if cur_rank == 0:
-    torch.save(global_train_val_ppls,
-               f"{basic_dir}{os.sep}global-train-ppl-{exp_details}.pt")
-    torch.save(global_test_ppls,
-               f"{basic_dir}{os.sep}global-test-ppl-{exp_details}.pt")
-
-print_rank_0(cur_rank, f"{graph} - {args.sorter} finished")

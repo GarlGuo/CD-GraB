@@ -1,7 +1,6 @@
 import torch.nn as nn
 import torch.nn.functional as F
 from d_model import *
-from c_optimizer import *
 import time
 from d_utils import *
 

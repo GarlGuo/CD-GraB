@@ -27,31 +27,19 @@ def last_even_num(odd_or_even_num):
         return odd_or_even_num - 1
 
 
-class DReal_Dataset_Indices:
+class D_Dataset_Indices:
     def __init__(self, B, node_cnt, node_idx_map, args=None) -> None:
         super().__init__()
         self.B = B
         self.node_cnt = node_cnt
         self.individual_batch_cnt = node_idx_map.shape[1]
-        # self.node_idx_map[i, j] means the original data index for node i in batch j
-        # local_node_idx_map = self._get_consistent_node_idx_map(node_idx_map, args)[
-        #     args.rank]
         if B == 1:
             self.local_indices = node_idx_map[args.rank].flatten()
         else:
             self.local_indices = node_idx_map[args.rank]
 
-    # def _get_consistent_node_idx_map(self, node_idx_map, args):
-    #     # dReal: sync the indices --> make rank 0 the one that distributes partitions
-    #     node_idx_map_buffer = node_idx_map
-    #     node_idx_map_buffer = node_idx_map_buffer.to(
-    #         f'cuda:{args.dev_id}') if args.backend == "nccl" else node_idx_map_buffer
-    #     node_idx_map_buffer = node_idx_map_buffer.cpu(
-    #     ) if args.backend == "nccl" else node_idx_map_buffer
-    #     return node_idx_map_buffer
 
-
-class DReal_Dataset_Partitioned(DReal_Dataset_Indices):
+class D_Dataset_Partitioned(D_Dataset_Indices):
     def __init__(self, dataset, B, node_cnt, args) -> None:
         # must shuffle before dividing
         # shuffle, split
@@ -65,30 +53,11 @@ class DReal_Dataset_Partitioned(DReal_Dataset_Indices):
         super().__init__(B, node_cnt, node_idx_map, args)
 
 
-def partitioned_dReal_dset_maker(
-    dset, B, nodes, args): return DReal_Dataset_Partitioned(dset, B, nodes, args)
+def partitioned_dset_maker(
+    dset, B, nodes, args): return D_Dataset_Partitioned(dset, B, nodes, args)
 
 
-class DReal_Dataset_RandomSampled(DReal_Dataset_Indices):
-    def __init__(self, dataset, B, node_cnt, args, ratio=None) -> None:
-        if ratio is None:
-            ratio = 1 / node_cnt
-        total_datapoint_cnt = last_even_num(len(dataset) // B) * B
-        idx_batchify = torch.arange(total_datapoint_cnt, dtype=torch.int).reshape(
-            ((len(dataset) // B), B))
-        individual_batch_cnt = int((len(dataset) // B) * ratio)
-        node_batch_idx_map = torch.tensor([np.random.choice(np.arange(
-            idx_batchify.shape[0]), replace=False, size=individual_batch_cnt) for _ in range(node_cnt)])
-        node_idx_map = torch.arange(total_datapoint_cnt).reshape(
-            (len(dataset) // B, B))[node_batch_idx_map]
-        super().__init__(B, node_cnt, node_idx_map, args)
-
-
-def random_sample_dReal_dset_maker(dset, B, nodes, args, ratio): return DReal_Dataset_RandomSampled(
-    dset, B, nodes, args, ratio=ratio)
-
-
-class DReal_Dataset_Plain(DReal_Dataset_Indices):
+class D_Dataset_Plain(D_Dataset_Indices):
     def __init__(self, dataset, B, node_cnt, args) -> None:
         total_datapoint_cnt = last_even_num(len(dataset) // B) * B
         node_idx_map = torch.stack(
@@ -96,49 +65,13 @@ class DReal_Dataset_Plain(DReal_Dataset_Indices):
         super().__init__(B, node_cnt, node_idx_map, args)
 
 
-def plain_dReal_dset_maker(
-    dset, B, nodes, args): return DReal_Dataset_Plain(dset, B, nodes, args)
+def plain_dset_maker(
+    dset, B, nodes, args): return D_Dataset_Plain(dset, B, nodes, args)
 
 
-# most helpful if n << class_count
-class DReal_Dataset_ClassSplitted(DReal_Dataset_Indices):
-    def __init__(self, dataset, B, node_cnt, args, class_count=10) -> None:
-        single_node_class = (class_count // node_cnt)
-        single_class_node_map = dict()
-        single_class_node_class_arr = np.arange(
-            0, node_cnt * single_node_class).reshape(node_cnt, single_node_class)
-        for node_i in range(node_cnt):
-            for cls in single_class_node_class_arr[node_i]:
-                single_class_node_map[cls] = node_i
-
-        idx_cls_arr = []
-        node_idx_map = [None for _ in range(node_cnt)]
-        for i, (_, Y) in enumerate(dataset):
-            idx_cls_arr.append((i, Y))
-
-        idx_cls_arr = sorted(idx_cls_arr, key=(
-            lambda pair: (pair[1], pair[0])))
-        split = len(idx_cls_arr) // node_cnt
-        for node_i, start in enumerate(np.arange(0, split * node_cnt, split)):
-            node_idx_map[node_i] = [p[0]
-                                    for p in idx_cls_arr[start: start + split]]
-
-        node_idx_map = np.array(node_idx_map, dtype=np.int32)
-        individual_total_B = (node_idx_map.shape[1] // B)
-        individual_total_dp = B * individual_total_B
-        node_idx_map = node_idx_map[:, :individual_total_dp].reshape(
-            node_cnt, individual_total_B, B)
-
-        super().__init__(B, node_cnt, node_idx_map, args)
-
-
-def class_splitted_dReal_dset_maker(dset, B, nodes, args, class_count=10): return DReal_Dataset_ClassSplitted(
-    dset, B, nodes, args, class_count=class_count)
-
-
-class DReal_VisionData(Dataset):
+class D_VisionData(Dataset):
     def __init__(self, node_cnt, dset_maker: VisionDataset,
-                 dset_addr, train_transform, test_transform, d_dataset_format=partitioned_dReal_dset_maker,
+                 dset_addr, train_transform, test_transform, d_dataset_format=partitioned_dset_maker,
                  download=False, train_B=16, test_B=128, device=None, dtype=torch.float32, args=None, **kw) -> None:
         super().__init__()
         self.node_cnt = node_cnt
@@ -147,7 +80,7 @@ class DReal_VisionData(Dataset):
         self.testset: VisionDataset = dset_maker(
             root=dset_addr, train=False, download=download, transform=test_transform)
 
-        self.indices: DReal_Dataset_Indices = d_dataset_format(
+        self.indices: D_Dataset_Indices = d_dataset_format(
             self.trainset, train_B, self.node_cnt, args=args, **kw)
 
         # print(f'{args.rank}: {self.indices.local_indices}')
@@ -174,9 +107,9 @@ class DReal_VisionData(Dataset):
         return self.images[index], self.targets[index]
 
 
-class DReal_CIFAR10(DReal_VisionData):
+class D_CIFAR10(D_VisionData):
     def __init__(self, node_cnt, train_B=16, test_B=64,
-                 dset_addr=f'data{os.sep}cifar10-data', d_dataset_format=partitioned_dReal_dset_maker, download=False, device=None, args=None, **kw) -> None:
+                 dset_addr=f'data{os.sep}cifar10-data', d_dataset_format=partitioned_dset_maker, download=False, device=None, args=None, **kw) -> None:
         cifar10_normalize_transform = transforms.Normalize(
             (0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
         train_transform = transforms.Compose([
@@ -188,7 +121,7 @@ class DReal_CIFAR10(DReal_VisionData):
             transforms.ToTensor(), cifar10_normalize_transform
         ]
         )
-        super(DReal_CIFAR10, self).__init__(
+        super(D_CIFAR10, self).__init__(
             node_cnt, torchvision.datasets.CIFAR10,
             dset_addr, train_transform, test_transform,
             download=download, train_B=train_B, test_B=test_B,
@@ -196,30 +129,6 @@ class DReal_CIFAR10(DReal_VisionData):
             **kw
         )
         self.figure_size_flatten = 3 * 32 * 32
-        self.num_classes = 10
-
-
-class DReal_MNIST(DReal_VisionData):
-    def __init__(self, node_cnt, train_B=16, test_B=64,
-                 dset_addr=f'data{os.sep}mnist-data', d_dataset_format=partitioned_dReal_dset_maker, download=False, device=None, args=None, **kw) -> None:
-        mnist_normalize_transform = transforms.Normalize((0.1307,), (0.3081,))
-        train_transform = transforms.Compose([
-            transforms.ToTensor(),
-            mnist_normalize_transform,
-        ]
-        )
-        test_transform = transforms.Compose([
-            transforms.ToTensor(), mnist_normalize_transform
-        ]
-        )
-        super(DReal_MNIST, self).__init__(
-            node_cnt, torchvision.datasets.MNIST,
-            dset_addr, train_transform, test_transform,
-            download=download, d_dataset_format=d_dataset_format,
-            train_B=train_B, test_B=test_B,
-            device=device, args=args, **kw
-        )
-        self.figure_size_flatten = 1 * 28 * 28
         self.num_classes = 10
 
 
@@ -280,8 +189,8 @@ class GLUE:
         self.data_collator = default_data_collator
 
 
-class CReal_GLUE:
-    def __init__(self, args, exp_config, node_cnt, device=None, d_dataset_format=partitioned_dReal_dset_maker, **kw) -> None:
+class D_GLUE:
+    def __init__(self, args, exp_config, node_cnt, device=None, d_dataset_format=partitioned_dset_maker, **kw) -> None:
         self.node_cnt = node_cnt
         self.device = device
 
@@ -289,7 +198,7 @@ class CReal_GLUE:
 
         self.trainset = list(DataLoader(
             self.glue.trainset, shuffle=False, collate_fn=self.glue.data_collator, batch_size=args.train_B))
-        self.indices: DReal_Dataset_Indices = d_dataset_format(
+        self.indices: D_Dataset_Indices = d_dataset_format(
             self.trainset, args.train_B, self.node_cnt, args=args, **kw)
 
         self.trainloader = DataLoader(
@@ -313,9 +222,9 @@ class CReal_GLUE:
         return new_data
 
 
-class CReal_GLUE_Embeddings:
+class D_GLUE_Embeddings:
     @torch.no_grad()
-    def __init__(self, args, exp_config, node_cnt, model, device=None, d_dataset_format=partitioned_dReal_dset_maker, **kw) -> None:
+    def __init__(self, args, exp_config, node_cnt, model, device=None, d_dataset_format=partitioned_dset_maker, **kw) -> None:
         self.node_cnt = node_cnt
         self.device = device
         self.glue = GLUE(args, exp_config)
@@ -369,7 +278,7 @@ class CReal_GLUE_Embeddings:
                          for i in range(len(self.trainset_embeddings))]
         self.testset = [(self.testset_embeddings[i], self.testset_labels[i])
                         for i in range(len(self.testset_embeddings))]
-        self.indices: DReal_Dataset_Indices = d_dataset_format(
+        self.indices: D_Dataset_Indices = d_dataset_format(
             self.trainset_embeddings, args.train_B, self.node_cnt, args=args, **kw)
         self.trainloader = DataLoader(self.trainset, batch_size=args.test_B)
         self.testloader = DataLoader(self.testset, batch_size=args.test_B)
@@ -387,105 +296,3 @@ class CReal_GLUE_Embeddings:
             device=self.device)
         return embeddings, labels
 
-
-class Dataset_M4(Dataset):
-    def __init__(self,
-                 input_length,  # num of input steps
-                 output_length,  # forecasting horizon
-                 freq,  # The frequency of time series
-                 train_data_addr="data/M4/train.npy",  # path to numpy data files
-                 # for testing mode, we need to load both train and test data
-                 test_data_addr="data/M4/test.npy",
-                 mode="train",  # train, validation or test
-                 expand_dim=False,  # whether expand last dimension
-                 seed=0,
-                 device=None
-                 ):
-        self.input_length = input_length
-        self.output_length = output_length
-        self.mode = mode
-        self.expand_dim = expand_dim
-        self.device = device
-        # Load training set
-        self.train_data = np.load(train_data_addr, allow_pickle=True)
-        self.data_lsts = self.train_data.item().get(freq)
-
-        # First do global standardization
-        self.ts_means, self.ts_stds = [], []
-        for i in range(len(self.data_lsts)):
-            avg, std = np.mean(self.data_lsts[i]), np.std(self.data_lsts[i])
-            self.ts_means.append(avg)
-            self.ts_stds.append(std)
-            self.data_lsts[i] = (self.data_lsts[i] - avg) / std
-
-        if mode == "test":
-            self.test_lsts = np.load(
-                test_data_addr, allow_pickle=True).item().get(freq)
-            for i in range(len(self.test_lsts)):
-                self.test_lsts[i] = (self.test_lsts[i] -
-                                     self.ts_means[i])/self.ts_stds[i]
-            self.ts_indices = [i for i in range(len(self.test_lsts))]
-
-        elif mode == "train" or "valid":
-            # shuffle slices before split
-            self.ts_indices = [(i, j) for i in range(len(self.data_lsts))
-                               for j in range(0, len(self.data_lsts[i]) - input_length - output_length, 3)]
-            np.random.RandomState(0).shuffle(self.ts_indices)
-
-            # 80%-20% train-validation split
-            if mode == "train":
-                self.ts_indices = self.ts_indices[:int(
-                    len(self.ts_indices)*0.9)]
-            elif mode == "valid":
-                self.ts_indices = self.ts_indices[int(
-                    len(self.ts_indices)*0.9):]
-        else:
-            raise NotImplementedError()
-
-    def __len__(self):
-        return len(self.ts_indices)
-
-    def __getitem__(self, index):
-        if self.mode == "test":
-            x = self.data_lsts[index][-self.input_length:]
-            y = self.test_lsts[index]
-        else:
-            i, j = self.ts_indices[index]
-            x = self.data_lsts[i][j:j+self.input_length]
-            y = self.data_lsts[i][j+self.input_length: j +
-                                  self.input_length+self.output_length]
-
-        if self.expand_dim:
-            return torch.from_numpy(x).float().unsqueeze(-1).to(self.device),  torch.from_numpy(y).float().unsqueeze(-1).to(self.device)
-        return torch.from_numpy(x).float().to(self.device), torch.from_numpy(y).float().to(self.device)
-
-
-class C_M4_Dataset(Dataset):
-    def __init__(self, args, node_cnt, input_length, output_length, freq, train_B, device=None, d_dataset_format=partitioned_dReal_dset_maker) -> None:
-        self.train_dataset = Dataset_M4(input_length=input_length, output_length=output_length,
-                                        freq=freq, mode="train", expand_dim=False, device=device)
-        self.val_dataset = Dataset_M4(input_length=input_length, output_length=output_length,
-                                      freq=freq, mode="valid", expand_dim=False, device=device)
-        self.test_dataset = Dataset_M4(
-            input_length=input_length, output_length=13, freq=freq, mode="test", expand_dim=False, device=device)
-
-        self.indices = d_dataset_format(
-            self.train_dataset, train_B, node_cnt, args)
-        self.train_loader_eval = DataLoader(
-            self.train_dataset, batch_size=1024, shuffle=False)
-        self.valid_loader = DataLoader(
-            self.val_dataset, batch_size=1024, shuffle=False)
-        self.test_loader = DataLoader(
-            self.test_dataset, batch_size=1024, shuffle=False)
-        self.device = device
-
-    def __len__(self):
-        return self.indices.individual_batch_cnt
-
-    def __getitem__(self, idx):
-        mapped_idx = self.indices.local_indices[idx]
-        inps, tgts = self.train_dataset[mapped_idx]
-        if len(inps.shape) > 1:
-            return inps, tgts
-        else:
-            return inps.unsqueeze(0).unsqueeze(-1), tgts.unsqueeze(0).unsqueeze(-1)

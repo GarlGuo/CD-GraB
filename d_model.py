@@ -19,18 +19,18 @@ def fro_norm_sq(tensor) -> torch.Tensor:
     return torch.norm(tensor, 'fro') ** 2
 
 
-class DReal_Model(nn.Module):
+class D_Model(nn.Module):
     def __init__(self, rank, node_cnt, protocol, model_maker: Callable[[], nn.Module]) -> None:
-        super(DReal_Model, self).__init__()
+        super(D_Model, self).__init__()
         self.model = model_maker()
         self.model_maker = model_maker
         self.node_cnt = node_cnt
         self.layer_cnt = len(list(self.model.parameters()))
         self.rank = rank
         self.protocol = protocol
-        self.weight_buffer = DReal_TensorBuffer(
+        self.weight_buffer = D_TensorBuffer(
             rank, node_cnt, [p for p in self.model.parameters() if p.requires_grad], protocol)
-        self.grad_copy_buffer = DReal_TensorBuffer(rank, node_cnt, [torch.zeros_like(
+        self.grad_copy_buffer = D_TensorBuffer(rank, node_cnt, [torch.zeros_like(
             p) for p in self.model.parameters() if p.requires_grad], protocol)
         # Stats-collecting fields below
         if rank == 0:
@@ -88,7 +88,7 @@ class DReal_Model(nn.Module):
         return torch.cat([p.grad.view(-1).detach().clone() for p in self.model.parameters() if p.requires_grad])
 
     def get_grad_communication_buffer(self):
-        return DReal_TensorBuffer(
+        return D_TensorBuffer(
             self.rank,
             self.node_cnt,
             torch.cat([p.grad.view(-1).detach().clone()

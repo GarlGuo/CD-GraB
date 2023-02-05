@@ -79,8 +79,8 @@ class LMDataset(torch.utils.data.Dataset):
         return (self.data.shape[0] // self.args.bptt)
 
 
-class DReal_LM_Dataset:
-    def __init__(self, args, node_cnt, dir_addr:str, d_dataset_format=partitioned_dReal_dset_maker, device=None, **kw) -> None:
+class D_LM_Dataset:
+    def __init__(self, args, node_cnt, dir_addr:str, d_dataset_format=partitioned_dset_maker, device=None, **kw) -> None:
         self.device = device
         train_path = os.path.join(dir_addr, 'train.txt')
         valid_path = os.path.join(dir_addr, 'valid.txt')

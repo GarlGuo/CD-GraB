@@ -2,7 +2,7 @@ import torch
 import torch.distributed as dist
 from d_cv_train import *
 from d_data import *
-from dReal_topology import *
+from d_topology import *
 import d_model
 from d_model import *
 from d_algo import *
@@ -79,13 +79,12 @@ parser.add_argument(
 parser.add_argument(
     "--sorter",
     type=str,
-    default="d-ind-pairb",
+    default="D-GraB",
     choices=[
-        "d-onlinebalance",
-        "d-grab",
-        "d-rr",
-        "d-with-r",
-        "d-ind-pairb"
+        "D-GraB",
+        "I-B",
+        "D-RR",
+        "I-PB"
     ]
 )
 parser.add_argument("--epochs", type=int, default=3, help="Total number of training epochs to perform.")
@@ -134,26 +133,23 @@ torch.cuda.set_device(args.dev_id)
 print_rank_0(cur_rank, f'W: {W}')
 seed_everything(args.seed)
 
-d_data = DReal_CIFAR10(args.node_cnt, train_B=args.train_B, test_B=args.test_B, device=device, d_dataset_format=partitioned_dReal_dset_maker, args=args)
+d_data = D_CIFAR10(args.node_cnt, train_B=args.train_B, test_B=args.test_B, device=device, d_dataset_format=partitioned_dset_maker, args=args)
 model_maker = lambda: d_model.LeNet(seed=args.seed).to(device)
 
-d_model = DReal_Model(graph.rank, args.node_cnt, protocol, model_maker)
+d_model = D_Model(graph.rank, args.node_cnt, protocol, model_maker)
 sgd = torch.optim.SGD(d_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
 criterion = ConvexMultiClassification_Loss(d_model)
 
 args.d = sum(p.numel() for p in d_model.parameters() if p.requires_grad)
 sorter = {
-    "d-onlinebalance": (lambda: D_GraB_PairBalance(args.rank, args, n=args.node_cnt, m=len(d_data), d=args.d, device=device)) 
-        if args.grad_acc != None and args.grad_acc > 1
-        else (lambda: CReal_GraB_OnlinePairBalance_noGradAcc(args.rank, args, n=args.node_cnt, m=len(d_data), d=args.d, device=device)),
-    "d-grab": lambda: I_Balance(args.rank, args, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "d-rr": lambda: D_RR(args.rank, args.node_cnt, len(d_data)),
-    "d-with-r": lambda: CReal_WithR(args.rank, args.node_cnt, len(d_data)),
-    "d-ind-pairb": lambda: D_PairBalance(args.rank, args, m=len(d_data), n=args.node_cnt,
+    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
+    "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
+    "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
+    "I-PB": lambda: D_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
         d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
 }[args.sorter]()
 
-exp_details = f"cReal-{args.sorter}-node-{args.node_cnt}-backend-{args.backend}-lr-{args.lr}-epoch-{args.epochs}-train-B-{args.train_B}-grad_acc-{args.grad_acc}-seed-{args.seed}"
+exp_details = f"{args.sorter}-node-{args.node_cnt}-backend-{args.backend}-lr-{args.lr}-epoch-{args.epochs}-train-B-{args.train_B}-grad_acc-{args.grad_acc}-seed-{args.seed}"
 print_rank_0(exp_details)
 counter = tqdm(range(len(d_data) * args.epochs), miniters=100)
 
@@ -164,34 +160,15 @@ inidvidual_LOSS = []
 
 for e in range(args.epochs):
     dist.barrier()
-    if args.grad_acc == 1 or args.grad_acc == None:
-        print_rank_0(cur_rank, "Running noGradAcc optimized trainer")
-        individual_loss = cReal_cv_train_noGradAcc(d_data, sgd, d_model, sorter, criterion, e, counter, args, eventTimer)
-    else:
-        print_rank_0(cur_rank, "Running regular trainer")
-        individual_loss = cReal_cv_train(d_data, sgd, d_model, sorter, criterion, e, counter, args, eventTimer, grad_acc=args.grad_acc)
+    individual_loss = d_cv_train(d_data, sgd, d_model, sorter, criterion, e, counter, args, eventTimer, grad_acc=args.grad_acc)
     inidvidual_LOSS.append(individual_loss)
     
     dist.barrier()
-    global_avg_test_score = cReal_cv_test(d_data.testloader, d_model, e, cur_rank, device=device)
+    global_avg_test_score = d_cv_test(d_data.testloader, d_model, e, cur_rank, device=device)
     global_test_acc.append(global_avg_test_score)
     
     dist.barrier()
     if args.rank == 0:
-        cur_e_trainLoss, cur_e_trainAcc = cReal_cv_full_train_loss(args.rank, d_data.trainloader,d_model, criterion, device=device)
+        cur_e_trainLoss, cur_e_trainAcc = d_cv_full_train_loss(args.rank, d_data.trainloader,d_model, criterion, device=device)
         global_full_train_loss.append(cur_e_trainLoss)
         global_full_train_acc.append(cur_e_trainAcc)
-
-exp_folder = os.path.join(f"pt_charlie{os.sep}0114_lenet_cifar10_debug{os.sep}", exp_details)
-if args.rank == 0:
-    if not os.path.exists(exp_folder):
-        os.makedirs(exp_folder)
-dist.barrier()
-eventTimer.save_results(os.path.join(exp_folder, f"eventTimer{cur_rank}.pt"))
-torch.save(torch.as_tensor(inidvidual_LOSS), os.path.join(exp_folder, f"individual_train_loss{cur_rank}.pt"))
-
-if args.rank == 0:
-    print('saving expDetails results')
-    torch.save(torch.as_tensor(global_full_train_loss), os.path.join(exp_folder, f"full_train_loss.pt"))
-    torch.save(torch.as_tensor(global_full_train_acc), os.path.join(exp_folder, f"full_train_acc.pt"))
-    torch.save(torch.as_tensor(global_test_acc), os.path.join(exp_folder, f"test_acc.pt"))

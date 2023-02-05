@@ -27,9 +27,8 @@ class D_Sorter(Sorter):
 
 
 class D_GraB_PairBalance(D_Sorter):
-    def __init__(self, rank: int, args, n: int, m: int, d: int, device):
-        assert m % 2 == 0, "online pair balance only supports even number"
-        self.args = args
+    def __init__(self, rank: int, n: int, m: int, d: int, device):
+        assert m % 2 == 0, "D-GraB PairBalance only supports even number"
         self.rank = rank
         self.n = n
         self.m = m
@@ -96,8 +95,8 @@ class D_GraB_PairBalance(D_Sorter):
 
 
 class I_Balance(D_Sorter):
-    def __init__(self, rank, args, n: int, m: int, d: int, device):
-        def sort_maker(): return GraB(args, m, d, device=device)
+    def __init__(self, rank, n: int, m: int, d: int, device):
+        def sort_maker(): return GraB(m, d, device=device)
         self.stats = {
             'sorter_cur_sum_fro': []
         }
@@ -113,11 +112,11 @@ class I_Balance(D_Sorter):
         return super().sort()
 
 
-class D_RR(D_Sorter):
+class D_RandomReshuffling(D_Sorter):
     def __init__(self, rank, n, m):
-        def sort_maker(): return RandomShuffle(m)
+        def sort_maker(): return RandomShuffling(m)
         super().__init__(rank, n, sort_maker)
-        self.num_batches = m
+        self.m = m
 
     def step(self, *args, **kw):
         pass
@@ -127,7 +126,7 @@ class D_RR(D_Sorter):
 
 
 class D_PairBalance(D_Sorter):
-    def __init__(self, rank: int, args, m: int, n: int, d: int, device=None):
+    def __init__(self, rank: int, m: int, n: int, d: int, device=None):
         def sort_maker(): return PairBalance_Sorter(m, d, device=device)
         super().__init__(rank, n, sort_maker)
 
