@@ -1,12 +1,9 @@
-from typing import List
-import datasets
 import torch
 from torch.utils.data import *
 from datasets import load_dataset, load_metric
 from d_data import *
 from torch.utils.data import DataLoader
 from d_eventTimer import EventTimer
-import transformers
 from transformers import (
     AutoConfig,
     AutoModelForSequenceClassification,
@@ -97,12 +94,18 @@ def d_bert_train(glue_data: D_GLUE_Embeddings,
     for batch in range(glue_data.indices.individual_batch_cnt):
         embeddings, labels = glue_data[perm_list[batch]]
         optimizer.zero_grad()
+        
+        # forward pass
         with eventTimer(f"epoch-{epoch}"):
             with eventTimer("forward_pass"):
                 loss = c_bert(embeddings, labels=labels)
+
+        # backward pass
         with eventTimer(f"epoch-{epoch}"):
             with eventTimer("backward"):
                 loss.backward()
+        
+        # sorter step
         with eventTimer(f"epoch-{epoch}"):
             with eventTimer("sorter_step"):
                 sorter.step(optimizer, batch)

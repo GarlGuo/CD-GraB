@@ -13,7 +13,7 @@ def flatten_grad(optimizer):
 
 
 class D_Sorter(Sorter):
-    def __init__(self, rank, node_cnt: int, sort_maker: Callable[[], Sorter]) -> None:
+    def __init__(self, rank: int, node_cnt: int, sort_maker: Callable[[], Sorter]) -> None:
         super().__init__()
         self.node_cnt = node_cnt
         self.rank = rank
@@ -22,8 +22,6 @@ class D_Sorter(Sorter):
     def sort(self):
         return self.sorter.sort()
 
-    def save_after_training(self, addr):
-        pass
 
 
 class D_GraB_PairBalance(D_Sorter):
@@ -43,7 +41,7 @@ class D_GraB_PairBalance(D_Sorter):
         self.left_ptr, self.right_ptr = 0, self.m - 1
         self.gathered_pair_cache = [torch.zeros(
             self.d, device=self.device) for _ in range(self.n)]
-        self.args = args
+
 
     def all_gather_pair_cache(self):
         """
@@ -95,7 +93,7 @@ class D_GraB_PairBalance(D_Sorter):
 
 
 class I_Balance(D_Sorter):
-    def __init__(self, rank, n: int, m: int, d: int, device):
+    def __init__(self, rank: int, n: int, m: int, d: int, device):
         def sort_maker(): return GraB(m, d, device=device)
         self.stats = {
             'sorter_cur_sum_fro': []
@@ -113,7 +111,7 @@ class I_Balance(D_Sorter):
 
 
 class D_RandomReshuffling(D_Sorter):
-    def __init__(self, rank, n, m):
+    def __init__(self, rank: int, n: int, m: int):
         def sort_maker(): return RandomShuffling(m)
         super().__init__(rank, n, sort_maker)
         self.m = m

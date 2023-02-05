@@ -147,8 +147,7 @@ dtype = torch.int64
 
 eventTimer = EventTimer(device=device)
 
-d_data = D_LM_Dataset(
-    args, args.node_cnt, f'data{os.sep}wikitext-2', device=device)
+d_data = D_LM_Dataset(args, args.node_cnt, f'data{os.sep}wikitext-2', device=device)
 
 
 def model_maker():
@@ -170,11 +169,10 @@ n = node_cnt
 d = sum(p.numel() for p in c_model.parameters() if p.requires_grad)
 
 sorter = {
-    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
-    "I-PB": lambda: I_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
-        d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
+    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=n, m=m, d=d, device=device),
+    "I-B": lambda: I_Balance(args.rank, n=n, m=m, d=d, device=device),
+    "D-RR": lambda: D_RandomReshuffling(args.rank, n, m),
+    "I-PB": lambda: I_PairBalance(args.rank, m=m, n=n, d=d, device=device)
 }[args.sorter]()
 
 counter = tqdm(range(len(d_data) * args.epochs), miniters=100)
@@ -188,10 +186,10 @@ for e in range(1, args.epochs + 1):
 
     print_rank_0(cur_rank, "validation on training dataset")
     dist.barrier()
-    global_avg_train_ppl = d_LM_test(d_data.trainset_eval, c_model, e, args.rank)
+    global_avg_train_ppl = d_LM_test(d_data.trainset_eval, c_model, e)
 
     print_rank_0(cur_rank, "validation on testing dataset")
     dist.barrier()
-    global_avg_test_ppl = d_LM_test(d_data.test_dataset, c_model, e, args.rank)
+    global_avg_test_ppl = d_LM_test(d_data.test_dataset, c_model, e)
 
     lr_scheduler.step(global_avg_train_ppl)

@@ -12,11 +12,7 @@ import torch
 from datasets import load_dataset
 from torch.utils.data import *
 import numpy as np
-from transformers import (
-    AutoTokenizer,
-    DataCollatorWithPadding,
-    default_data_collator,
-)
+from transformers import AutoTokenizer, default_data_collator
 from tqdm.auto import tqdm
 
 
@@ -28,29 +24,29 @@ def last_even_num(odd_or_even_num):
 
 
 class D_Dataset_Indices:
-    def __init__(self, B, node_cnt, node_idx_map, args=None) -> None:
+    def __init__(self, microbatch: int, node_cnt: int, node_idx_map, args=None) -> None:
         super().__init__()
-        self.B = B
+        self.B = microbatch
         self.node_cnt = node_cnt
         self.individual_batch_cnt = node_idx_map.shape[1]
-        if B == 1:
+        if microbatch == 1:
             self.local_indices = node_idx_map[args.rank].flatten()
         else:
             self.local_indices = node_idx_map[args.rank]
 
 
 class D_Dataset_Partitioned(D_Dataset_Indices):
-    def __init__(self, dataset, B, node_cnt, args) -> None:
+    def __init__(self, dataset, microbatch, node_cnt, args) -> None:
         # must shuffle before dividing
         # shuffle, split
         # shuffle before reshape, instead of simply calling, arange => random.shuffle => reshape
         data_idx = np.arange(len(dataset))
         random.shuffle(data_idx)
-        total_batch_cnt = last_even_num(len(dataset) // (B * node_cnt)) * node_cnt
-        target_len = total_batch_cnt * B
+        total_batch_cnt = last_even_num(len(dataset) // (microbatch * node_cnt)) * node_cnt
+        target_len = total_batch_cnt * microbatch
         node_idx_map = torch.tensor(data_idx[:target_len], dtype=torch.int64).reshape(
-            (node_cnt, total_batch_cnt // node_cnt, B))
-        super().__init__(B, node_cnt, node_idx_map, args)
+            (node_cnt, total_batch_cnt // node_cnt, microbatch))
+        super().__init__(microbatch, node_cnt, node_idx_map, args)
 
 
 def partitioned_dset_maker(
@@ -58,15 +54,14 @@ def partitioned_dset_maker(
 
 
 class D_Dataset_Plain(D_Dataset_Indices):
-    def __init__(self, dataset, B, node_cnt, args) -> None:
-        total_datapoint_cnt = last_even_num(len(dataset) // B) * B
+    def __init__(self, dataset, microbatch, node_cnt, args) -> None:
+        total_datapoint_cnt = last_even_num(len(dataset) // microbatch) * microbatch
         node_idx_map = torch.stack(
-            [torch.arange(total_datapoint_cnt).reshape((len(dataset) // B), B)] * node_cnt)
-        super().__init__(B, node_cnt, node_idx_map, args)
+            [torch.arange(total_datapoint_cnt).reshape((len(dataset) // microbatch), microbatch)] * node_cnt)
+        super().__init__(microbatch, node_cnt, node_idx_map, args)
 
 
-def plain_dset_maker(
-    dset, B, nodes, args): return D_Dataset_Plain(dset, B, nodes, args)
+def plain_dset_maker(dset, microbatch, nodes, args): return D_Dataset_Plain(dset, microbatch, nodes, args)
 
 
 class D_VisionData(Dataset):
