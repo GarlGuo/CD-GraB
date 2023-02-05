@@ -4,36 +4,42 @@
 D-GraB is a distributed gradient balancing framework that aims to find distributed data permutation with provably better convergence guarantees than Distributed Random Reshuffling (D-RR). Our paper can be found [here](https://arxiv.org/abs/2302.00845).
 
 
-# Install
-## Requirements
+# Requirements
 Python >= 3.7
 PyTorch >= 1.10.0
 CUDA >= 10.1 on linux
 
-## Experiments
+# Experiments
 
-### LR with BERT embeddings on GLUE tasks
+## LR with BERT embeddings on GLUE tasks
 
+#### QNLI
 Please run 
 ```
-  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lr-glue.py --node_cnt 16 --lr 1e-4 --epochs 30 --grad_acc 2 --sorter D-GraB --backend gloo
+  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lr-glue.py --node_cnt 16 --lr 1e-4 --epochs 50 --grad_acc 2 --sorter D-GraB --backend gloo --task_name qnli
 ```
 
-### LeNet on CIFAR10
+#### QQP
+Please run 
+```
+  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lr-glue.py --node_cnt 16 --lr 1e-4 --epochs 50 --grad_acc 2 --sorter D-GraB --backend gloo --task_name qqp
+```
+
+## LeNet on CIFAR10
 
 Please run 
 ```
   torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lenet-cifar10.py --node_cnt 16 --lr 1e-3 --epochs 100 --grad_acc 2 --sorter D-GraB --backend gloo
 ```
 
-### LSTM on Wiki2
+## LSTM on Wiki2
 
 Please run 
 ```
   torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lstm-wiki2.py --node_cnt 16 --lr 10.0 --epochs 30 --grad_acc 2 --sorter D-GraB --backend gloo
 ```
 
-### Random vectors simulation on herding bound
+## Random vectors simulation on herding bound
 
 Please run 
 ```
@@ -51,7 +57,7 @@ Please run
 
 
 # License
-D-GraB uses Apache-2 license in the [LICENSE](https://github.com/GarlGuo/D-GraB/tree/release/LICENSE) file.
+D-GraB uses Apache-2 license in the [LICENSE](https://github.com/GarlGuo/D-GraB/blob/main/LICENSE) file.
 
 
 # Cite us
