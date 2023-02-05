@@ -67,13 +67,14 @@ parser.add_argument(
 parser.add_argument(
     "--weight_decay",
     type=float,
-    default=0,
+    default=1e-2,
     help="weight decay",
 )
 parser.add_argument(
     "--grad_acc",
     type=int,
     default=2,
+    help="number of gradient accumulation steps",
 )
 parser.add_argument(
     "--sorter",

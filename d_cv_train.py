@@ -16,6 +16,7 @@ def d_cv_train(d_trainset: D_VisionData,
           sorter: Sorter, criterion: nn.Module, 
           epoch, counter, args, eventTimer: EventTimer, grad_acc=8):
     model.train()
+    # We obtain the order from sorter before each epoch
     with eventTimer("sorter_sort"): 
         perm_list = sorter.sort()
 
@@ -23,6 +24,7 @@ def d_cv_train(d_trainset: D_VisionData,
     acc_step = 0
     print_rank_0(args.rank, f"Number of batches: {len(d_trainset)}")
     for batch in range(len(d_trainset)):
+        # Using the obtained order, we get the training examples
         X, Y = d_trainset[perm_list[batch]]
         
         optimizer.zero_grad()
@@ -34,6 +36,7 @@ def d_cv_train(d_trainset: D_VisionData,
             with eventTimer("backward"):
                 loss.backward()
 
+            # Depending on the sorter, there might be online sorting steps
             with eventTimer("sorter_step"):
                 sorter.step(optimizer, batch)
 
