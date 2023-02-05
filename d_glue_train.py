@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from d_model import *
 from d_utils import *
 from tqdm.auto import tqdm
-from d_algo import flatten_grad, D_Sorter
+from d_algo import D_Sorter
 
 
 
@@ -75,7 +75,7 @@ def get_glue_config(args, seed=0):
         "num_labels": num_labels
     }
 
-
+# train all models in synchronous parameter sever settings
 def d_bert_train(glue_data: D_GLUE_Embeddings,
                      optimizer: torch.optim.Optimizer,
                      c_bert: D_Model,
@@ -136,7 +136,7 @@ def d_bert_train(glue_data: D_GLUE_Embeddings,
                   glue_data.indices.individual_batch_cnt, cur_loss.item() / batch))
     return cur_loss / glue_data.indices.individual_batch_cnt
 
-
+# evaluate the test accuracy of average model weights
 @torch.no_grad()
 def evaluate_one_model(model: nn.Module, testloader: DataLoader, exp_config, device=None):
     model.eval()
@@ -165,6 +165,7 @@ def d_bert_test(testloader: DataLoader, c_bert: D_Model, epoch: int, exp_config,
         return global_score
 
 
+# evaluate the full train loss of average model weights
 @torch.no_grad()
 def d_full_train_loss(exp_config, trainloader: DataLoader, c_bert: D_Model, rank, device=None):
     c_bert.eval()  # disable dropout

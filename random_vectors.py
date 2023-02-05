@@ -28,7 +28,7 @@ def parallel_herding_bound(vecs):
     return np.maximum.accumulate(np.linalg.norm(np.cumsum(np.sum(vecs, axis=1), axis=0), ord=float('inf'), axis=1))[-1]
 
 
-def reorder_from_signs(signs, single_vecs):
+def sign_reorder(signs, single_vecs):
     next_vecs = np.empty_like(single_vecs)
 
     pos_half = np.where(signs == +1)
@@ -44,7 +44,7 @@ def reorder_from_signs(signs, single_vecs):
     return next_vecs
 
 
-def vanilla_balance(single_vecs):
+def Balance(single_vecs):
     # single_vecs: mn, d
     run_sum = np.zeros_like(single_vecs[0])
     signs = np.zeros((len(single_vecs),), dtype=np.int8)
@@ -58,47 +58,47 @@ def vanilla_balance(single_vecs):
     return signs
 
 
-def vanilla_reorder_multiround(single_vecs, round):
+def Centralized_Balance_multiround(single_vecs, round):
     herding_bounds = []
     # single_vecs: mn, d
     herding_bounds.append(herding_bound(single_vecs))  # zero round
     for _ in range(round):
-        signs = vanilla_balance(single_vecs)
-        single_vecs = reorder_from_signs(signs, single_vecs)
+        signs = Balance(single_vecs)
+        single_vecs = sign_reorder(signs, single_vecs)
         herding_bounds.append(herding_bound(single_vecs))
     return herding_bounds
 
 
-def independent_parallel_balance(vecs):
+def Independent_Balance(vecs):
     # vecs: m, n, d
     m, n, d = vecs.shape
     signs = np.zeros((m, n), dtype=np.int8)
     for j in range(n):
-        signs_j = vanilla_balance(vecs[:, j, :])
+        signs_j = Balance(vecs[:, j, :])
         signs[:, j] = signs_j
     return signs
 
 
-def independent_parallel_reorder(signs, vecs):
+def Independent_reorder(signs, vecs):
     n = vecs.shape[1]
     next_vecs = np.empty_like(vecs)
     for j in range(n):
-        next_vecs[:, j, :] = reorder_from_signs(signs[:, j], vecs[:, j, :])
+        next_vecs[:, j, :] = sign_reorder(signs[:, j], vecs[:, j, :])
     return next_vecs
 
 
-def independent_parallel_reorder_multiround(vecs, round):
+def Independent_Balance_multiround(vecs, round):
     herding_bounds = []
     # vecs: m, n, d
     herding_bounds.append(parallel_herding_bound(vecs))  # zero round
     for _ in range(round):
-        signs = independent_parallel_balance(vecs)
-        vecs = independent_parallel_reorder(signs, vecs)
+        signs = Independent_Balance(vecs)
+        vecs = Independent_reorder(signs, vecs)
         herding_bounds.append(parallel_herding_bound(vecs))
     return herding_bounds
 
 
-def parallel_pair_balance_and_reorder(vecs):
+def D_GraB_and_reorder(vecs):
     # vecs: m, n, d
     m, n, d = vecs.shape
     mn = m * n
@@ -124,17 +124,17 @@ def parallel_pair_balance_and_reorder(vecs):
     return next_epoch_vecs
 
 
-def parallel_pair_balance_reorder_multiround(vecs, round):
+def D_GraB_multiround(vecs, round):
     herding_bounds = []
     # vecs: m, n, d
     herding_bounds.append(parallel_herding_bound(vecs))
     for _ in range(round):
-        vecs = parallel_pair_balance_and_reorder(vecs)
+        vecs = D_GraB_and_reorder(vecs)
         herding_bounds.append(parallel_herding_bound(vecs))
     return herding_bounds
 
 
-def centralized_pair_balance_and_reorder(vecs):
+def Centralized_PairBalance(vecs):
     # vecs: mn d
     mn, d = vecs.shape
     run_sum = np.zeros((d,))
@@ -158,49 +158,49 @@ def centralized_pair_balance_and_reorder(vecs):
     return next_epoch_vecs
 
 
-def centralized_pair_balance_reorder_multiround(vecs, round):
+def Centralized_PairBalance_multiround(vecs, round):
     herding_bounds = []
     # vecs: mn, d
     herding_bounds.append(herding_bound(vecs))
     for _ in range(round):
-        vecs = centralized_pair_balance_and_reorder(vecs)
+        vecs = Centralized_PairBalance(vecs)
         herding_bounds.append(herding_bound(vecs))
     return herding_bounds
 
 
-def independent_pair_balance_reorder_multiround(vecs, round):
+def Independent_PairBalance_multiround(vecs, round):
     herding_bounds = []
     # vecs: m, n, d
     herding_bounds.append(parallel_herding_bound(vecs))  # zero round
     for _ in range(round):
         for i in range(n):
-            vecs[:, i, :] = centralized_pair_balance_and_reorder(vecs[:, i, :])
+            vecs[:, i, :] = Centralized_PairBalance(vecs[:, i, :])
         herding_bounds.append(parallel_herding_bound(vecs))
     return herding_bounds
 
 
-vanilla_herding_values = []
-independent_herding_values = []
-order_server_herding_values = []
-centralized_pair_balance_herding_values = []
-independent_pair_balance_herding_values = []
+C_B_herding_values = []
+I_B_herding_values = []
+D_GraB_herding_values = []
+C_PB_herding_values = []
+I_PB_herding_values = []
 
 for i in range(args.r):
-    vecs = np.random.RandomState(i).randn(mn, d)
-    vecs = vecs / np.linalg.norm(vecs, ord=2, axis=1).reshape(mn, 1)
-    vecs = vecs.reshape(m, n, d)
-    vecs -= np.expand_dims(vecs.mean(axis=0), 0)
+    decentralized_vecs = np.random.RandomState(i).randn(mn, d)
+    decentralized_vecs = decentralized_vecs / np.linalg.norm(decentralized_vecs, ord=2, axis=1).reshape(mn, 1)
+    decentralized_vecs = decentralized_vecs.reshape(m, n, d)
+    decentralized_vecs -= np.expand_dims(decentralized_vecs.mean(axis=0), 0)
 
-    vanilla_vecs = vecs.reshape(mn, d)
-    vanilla_herding_values.append(
-        vanilla_reorder_multiround(vanilla_vecs, rounds))
-    independent_herding_values.append(
-        independent_parallel_reorder_multiround(vecs, rounds))
-    order_server_herding_values.append(
-        parallel_pair_balance_reorder_multiround(vecs, rounds))
-    centralized_pair_balance_herding_values.append(
-        centralized_pair_balance_reorder_multiround(vanilla_vecs, rounds))
-    independent_pair_balance_herding_values.append(
-        independent_pair_balance_reorder_multiround(vecs, rounds)
+    centralized_vecs = decentralized_vecs.reshape(mn, d)
+    C_B_herding_values.append(
+        Centralized_Balance_multiround(centralized_vecs, rounds))
+    I_B_herding_values.append(
+        Independent_Balance_multiround(decentralized_vecs, rounds))
+    D_GraB_herding_values.append(
+        D_GraB_multiround(decentralized_vecs, rounds))
+    C_PB_herding_values.append(
+        Centralized_PairBalance_multiround(centralized_vecs, rounds))
+    I_PB_herding_values.append(
+        Independent_PairBalance_multiround(decentralized_vecs, rounds)
     )
-    del vecs
+    del decentralized_vecs

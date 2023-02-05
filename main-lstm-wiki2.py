@@ -168,6 +168,7 @@ m = len(d_data)
 n = node_cnt
 d = sum(p.numel() for p in c_model.parameters() if p.requires_grad)
 
+# initialize distributed sorter
 sorter = {
     "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=n, m=m, d=d, device=device),
     "I-B": lambda: I_Balance(args.rank, n=n, m=m, d=d, device=device),
@@ -175,9 +176,7 @@ sorter = {
     "I-PB": lambda: I_PairBalance(args.rank, m=m, n=n, d=d, device=device)
 }[args.sorter]()
 
-counter = tqdm(range(len(d_data) * args.epochs), miniters=100)
-global_test_ppls, global_val_ppls, global_train_val_ppls = [], [], []
-local_train_losses = []
+counter = tqdm(range(m * args.epochs), miniters=100)
 
 seed_everything(args.seed)
 for e in range(1, args.epochs + 1):

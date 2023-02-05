@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from typing import List
 from d_lm_data import *
 from d_algo import D_Sorter
 from d_lstm_model import *
@@ -14,7 +13,7 @@ def repackage_hidden(h):
     else:
         return tuple(repackage_hidden(v) for v in h)
 
-
+# train all models in synchronous parameter sever settings
 def d_LM_train(c_data: D_LM_Dataset,
                 optimizer: Optimizer,
                 lm_model: D_Model,
@@ -31,25 +30,31 @@ def d_LM_train(c_data: D_LM_Dataset,
     H = lm_model.model.init_hidden(1)
     cur_loss = 0
     acc_step = 0
+
+    # get data permutation in current epoch
     with eventTimer(f"epoch-{epoch}"):
         with eventTimer("sorter_sort"):
             perm_list = sorter.sort()
 
     for batch in range(len(c_data)):
+        # retrieve data
         X, Y = c_data.trainset[perm_list[batch]]
         optimizer.zero_grad()
-
         H = repackage_hidden(H)
+
+        # forward pass
         with eventTimer(f"epoch-{epoch}"):
             with eventTimer("forward_pass"):
                 Y_hat, H = lm_model.model(X, H)
                 loss = criterion(Y_hat, Y)
 
+        # backward pass
         with eventTimer(f"epoch-{epoch}"):
             with eventTimer("backward"):
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(lm_model.parameters(), 0.25)
 
+        # sorter step
         with eventTimer(f"epoch-{epoch}"):
             with eventTimer("sorter_step"):
                 sorter.step(optimizer, batch)
@@ -96,7 +101,7 @@ def evaluate_one_model(model: nn.Module, dataset: Dataset):
         # total_loss += criterion(output, targets).item()
     return (total_loss / (len(dataset.data) - 1))
 
-
+# evaluate the test PPL of averaged model weights
 @torch.no_grad()
 def d_LM_test(eval_dataset: Dataset, d_lm_model: D_Model, epoch: int):
     d_lm_model.eval()

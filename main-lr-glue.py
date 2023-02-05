@@ -7,8 +7,6 @@ from d_model import *
 from d_algo import *
 from tqdm.auto import tqdm
 import argparse
-import random
-import os
 import datetime
 import warnings
 from d_utils import print_rank_0
@@ -115,7 +113,6 @@ args.distributed = args.node_cnt > 1
 cur_rank = dist.get_rank() if args.distributed else 0
 args.rank = cur_rank
 
-dtype = torch.float32
 
 # set corresponding device id for each worker
 if args.node_cnt == torch.cuda.device_count():
@@ -138,21 +135,26 @@ seed_everything(args.seed)
 exp_config = get_glue_config(args, args.seed)
 bert_model = lambda: BERT_model_maker(args, exp_config, args.seed, device)[0]
 
+# initialize the data after applying BERT embeddings
 d_data = D_GLUE_Embeddings(
     args, exp_config, args.node_cnt, bert_model, device=device)
+# initialize the logistic regression head
 d_model = D_Model(graph.rank, args.node_cnt, protocol,
                       (lambda: BERT_LinearHead(exp_config['num_labels'], device, args.seed)))
 sgd = torch.optim.SGD(d_model.model.classifier.parameters(), lr=args.lr,
                       momentum=args.momentum, weight_decay=args.weight_decay)
 del bert_model
 
-args.d = sum(p.numel() for p in d_model.parameters() if p.requires_grad)
+m = len(d_data)
+n = args.node_cnt
+d = sum(p.numel() for p in d_model.parameters() if p.requires_grad)
+
+# initialize distributed sorter
 sorter = {
-    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
-    "I-PB": lambda: I_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
-                                  d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
+    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=n, m=m, d=d, device=device),
+    "I-B": lambda: I_Balance(args.rank, n=n, m=m, d=d, device=device),
+    "D-RR": lambda: D_RandomReshuffling(args.rank, n, m),
+    "I-PB": lambda: I_PairBalance(args.rank, m=m, n=n, d=d, device=device)
 }[args.sorter]()
 
 counter = tqdm(range(d_data.indices.individual_batch_cnt * args.epochs), miniters=100)
