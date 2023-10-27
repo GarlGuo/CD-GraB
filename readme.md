@@ -101,11 +101,11 @@ If you find CD-GraB helpful in your research, please consider citing us:
 ```
 @inproceedings{
   cooper2023cdgrab,
-  title   = {CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training},
-  author  = {A. Feder Cooper and Wentao Guo and Khiem Pham and Tiancheng Yuan and Charlie F. Ruan and Yucheng Lu and Christopher De Sa},
-  year    = {2023},
-  journal = {Advances in Neural Information Processing Systems},
-  url     = {https://arxiv.org/pdf/2302.00845.pdf}
+  title={CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training},
+  author={A. Feder Cooper and Wentao Guo and Khiem Pham and Tiancheng Yuan and Charlie F. Ruan and Yucheng Lu and Christopher De Sa},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2023},
+  url={https://arxiv.org/pdf/2302.00845.pdf}
 }
 ```
 ```
