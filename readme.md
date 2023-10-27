@@ -1,7 +1,7 @@
 # CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache-2.svg)](https://opensource.org/licenses/Apache-2.0)
 
-CD-GraB aims to find a distributed data permutation with provably better convergence guarantees than Distributed Random Reshuffling (D-RR). Our paper can be found [https://arxiv.org/abs/2302.00845](https://arxiv.org/abs/2302.00845).
+CD-GraB aims to find a distributed data permutation with provably better convergence guarantees than Distributed Random Reshuffling (D-RR) based on the gradient balancing frameworks introduced in the original [GraB paper](https://arxiv.org/pdf/2205.10733.pdf). The technical details can be found in our [NeurIPS'23 paper](https://arxiv.org/abs/2302.00845). Please contact Wentao Guo if you have any questions or suggestions on the paper / code: wg247@cornell.edu. 
 
 ![CD-GraB](CD-GraB.png)
 
