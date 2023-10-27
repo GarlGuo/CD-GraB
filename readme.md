@@ -99,13 +99,12 @@ A. Feder Cooper is supported by Christopher De Sa's NSF CAREER grant, and in par
 If you find CD-GraB helpful in your research, please consider citing us:
 
 ```
-@misc{cooper2023cdgrab,
-      title={CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training}, 
-      author={A. Feder Cooper and Wentao Guo and Khiem Pham and Tiancheng Yuan and Charlie F. Ruan and Yucheng Lu and Christopher De Sa},
-      year={2023},
-      eprint={2302.00845},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
+@inproceedings{cooper2023cdgrab,
+  title   = {CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training},
+  author  = {A. Feder Cooper and Wentao Guo and Khiem Pham and Tiancheng Yuan and Charlie F. Ruan and Yucheng Lu and Christopher De Sa},
+  year    = {2023},
+  journal = {Advances in Neural Information Processing Systems},
+  url     = {https://arxiv.org/pdf/2302.00845.pdf}
 }
 ```
 ```
