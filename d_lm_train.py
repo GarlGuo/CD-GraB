@@ -1,10 +1,214 @@
+import os
 import torch
-import torch.nn as nn
+from torch.utils.data import Dataset
+from d_data import *
 from d_lm_data import *
-from d_algo import D_Sorter
-from d_lstm_model import *
-from torch.optim import Optimizer
 from d_eventTimer import EventTimer
+from d_algo import *
+import torchopt
+from torch.utils._foreach_utils import _group_tensors_by_device_and_dtype, _has_foreach_support
+import torch.nn.functional as F
+
+
+class Dictionary(object):
+    def __init__(self):
+        self.word2idx = {}
+        self.idx2word = []
+
+    def add_word(self, word):
+        if word not in self.word2idx:
+            self.idx2word.append(word)
+            self.word2idx[word] = len(self.idx2word) - 1
+        return self.word2idx[word]
+
+    def __len__(self):
+        return len(self.idx2word)
+
+
+class Corpus(object):
+    def __init__(self, train_path, valid_path, test_path):
+        self.dictionary = Dictionary()
+        self.train = self.tokenize(train_path)
+        self.valid = self.tokenize(valid_path)
+        self.test = self.tokenize(test_path)
+
+    def tokenize(self, path):
+        """Tokenizes a text file."""
+        assert os.path.exists(path)
+        # Add words to the dictionary
+        with open(path, 'r', encoding="utf8") as f:
+            for line in f:
+                words = line.split() + ['<eos>']
+                for word in words:
+                    self.dictionary.add_word(word)
+
+        # Tokenize file content
+        with open(path, 'r', encoding="utf8") as f:
+            idss = []
+            for line in f:
+                words = line.split() + ['<eos>']
+                ids = []
+                for word in words:
+                    ids.append(self.dictionary.word2idx[word])
+                idss.append(torch.tensor(ids, dtype=torch.int64))
+            ids = torch.cat(idss)
+
+        return ids
+
+
+def batchify(data, bsz):
+    nbatch = data.size(0) // bsz
+    data = data[:nbatch * bsz]
+    data = data.view(bsz, -1).t().contiguous()
+    return data
+
+
+class LMDataset(Dataset):
+    def __init__(self, args, data: torch.Tensor, device=None) -> None:
+        super().__init__()
+        self.args = args
+        self.data = data
+        self.device = device
+
+    def __getitem__(self, i):
+        i = i * self.args.bptt
+        seq_len = min(self.args.bptt, self.data.shape[0] - 1 - i)
+        data = self.data[i:i + seq_len]
+        target = self.data[i + 1:i + 1 + seq_len]
+        return data.to(self.device), target.view(-1).to(self.device)
+
+    def __len__(self):
+        return (self.data.shape[0] - 1) // self.args.bptt
+
+
+class D_LM_Dataset:
+    def __init__(self, args, node_cnt, B, dir_addr: str, device=None, **kw) -> None:
+        self.device = device
+        self.args = args
+        self.B = B
+        self.microbatch = B // node_cnt
+        train_path = os.path.join(dir_addr, 'train.txt')
+        valid_path = os.path.join(dir_addr, 'valid.txt')
+        test_path = os.path.join(dir_addr, 'test.txt')
+
+        self.corpus = Corpus(train_path, valid_path, test_path)
+        self.ntokens = len(self.corpus.dictionary)
+
+        self.node_cnt = node_cnt
+        self.trainset = LMDataset(args, batchify(
+            self.corpus.train, B), device=self.device)
+
+        self.trainset_eval = LMDataset(args, batchify(
+            self.corpus.train, B), device=self.device)
+        self.val_dataset = LMDataset(args, batchify(
+            self.corpus.valid, B), device=self.device)
+        self.test_dataset = LMDataset(args, batchify(
+            self.corpus.test, B), device=self.device)
+
+        if node_cnt == B:
+            self.index = self.args.rank
+        else:
+            assert B % node_cnt == 0
+            self.index = torch.arange(B, device=device).reshape(
+                node_cnt, B // node_cnt)[self.args.rank]
+
+    def __len__(self):
+        return (len(self.trainset) // 2 * 2)
+
+    def __getitem__(self, idx):
+        if type(idx) == int or (isinstance(idx, torch.Tensor) and idx.dim() == 0):
+            X, Y = self.trainset[idx]
+            Y = Y.view(X.shape)
+            X, Y = X[:, self.index], Y[:, self.index].flatten()
+            if X.dim() == 1:
+                return X.unsqueeze(-1), Y
+            else:
+                return X, Y
+        elif isinstance(idx, torch.Tensor) and idx.dim() == 1:
+            X, Y = [], []
+            for i in idx:
+                x, y = self.trainset[i]
+                y = y.view(x.shape)
+                X.append(x[:, self.index])
+                Y.append(y[:, self.index])
+            return torch.stack(X, dim=-1), torch.cat(Y)
+        else:
+            raise NotImplementedError(idx)
+
+
+@torch.no_grad()
+def clip_grad_norm_(
+        grads, max_norm: float, norm_type: float = 2.0,
+        error_if_nonfinite: bool = False, foreach=None) -> torch.Tensor:
+    r"""Clips gradient norm of an iterable of parameters.
+    The norm is computed over all gradients together, as if they were
+    concatenated into a single vector. Gradients are modified in-place.
+    Args:
+        parameters (Iterable[Tensor] or Tensor): an iterable of Tensors or a
+            single Tensor that will have gradients normalized
+        max_norm (float): max norm of the gradients
+        norm_type (float): type of the used p-norm. Can be ``'inf'`` for
+            infinity norm.
+        error_if_nonfinite (bool): if True, an error is thrown if the total
+            norm of the gradients from :attr:`parameters` is ``nan``,
+            ``inf``, or ``-inf``. Default: False (will switch to True in the future)
+        foreach (bool): use the faster foreach-based implementation.
+            If ``None``, use the foreach implementation for CUDA and CPU native tensors and silently
+            fall back to the slow implementation for other device types.
+            Default: ``None``
+    Returns:
+        Total norm of the parameter gradients (viewed as a single vector).
+    """
+    max_norm = float(max_norm)
+    norm_type = float(norm_type)
+    if len(grads) == 0:
+        return torch.tensor(0.)
+    first_device = grads[0].device
+    grouped_grads = _group_tensors_by_device_and_dtype(
+        [[g.detach() for g in grads]])  # type: ignore[assignment]
+
+    if norm_type == torch.inf:
+        norms = [g.detach().abs().max().to(first_device) for g in grads]
+        total_norm = norms[0] if len(
+            norms) == 1 else torch.max(torch.stack(norms))
+    else:
+        norms = []
+        for ((device, _), [grads]) in grouped_grads.items():
+            if (foreach is None or foreach) and _has_foreach_support(grads, device=device):
+                norms.extend(torch._foreach_norm(grads, norm_type))
+            elif foreach:
+                raise RuntimeError(
+                    f'foreach=True was passed, but can\'t use the foreach API on {device.type} tensors')
+            else:
+                norms.extend([torch.norm(g, norm_type) for g in grads])
+
+        total_norm = torch.norm(torch.stack(
+            [norm.to(first_device) for norm in norms]), norm_type)
+
+    if error_if_nonfinite and torch.logical_or(total_norm.isnan(), total_norm.isinf()):
+        raise RuntimeError(
+            f'The total norm of order {norm_type} for gradients from '
+            '`parameters` is non-finite, so it cannot be clipped. To disable '
+            'this error and scale the gradients by the non-finite norm anyway, '
+            'set `error_if_nonfinite=False`')
+    clip_coef = max_norm / (total_norm + 1e-6)
+    # Note: multiplying by the clamped coef is redundant when the coef is clamped to 1, but doing so
+    # avoids a `if clip_coef < 1:` conditional which can require a CPU <=> device synchronization
+    # when the gradients do not reside in CPU memory.
+    clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
+    for ((device, _), [grads]) in grouped_grads.items():
+        if (foreach is None or foreach) and _has_foreach_support(grads, device=device):
+            torch._foreach_mul_(grads, clip_coef_clamped.to(
+                device))  # type: ignore[call-overload]
+        elif foreach:
+            raise RuntimeError(
+                f'foreach=True was passed, but can\'t use the foreach API on {device.type} tensors')
+        else:
+            clip_coef_clamped_device = clip_coef_clamped.to(device)
+            for g in grads:
+                g.detach().mul_(clip_coef_clamped_device)
+
+    return total_norm
 
 
 def repackage_hidden(h):
@@ -13,101 +217,130 @@ def repackage_hidden(h):
     else:
         return tuple(repackage_hidden(v) for v in h)
 
-# train all models in synchronous parameter sever settings
-def d_LM_train(c_data: D_LM_Dataset,
-                optimizer: Optimizer,
-                lm_model: D_Model,
-                sorter: D_Sorter, 
-                epoch: int, 
-                counter, 
-                args, 
-                eventTimer: EventTimer,
-                device, 
-                criterion=nn.NLLLoss()):
-    lm_model.train()
-    cur_loss: torch.Tensor = torch.zeros(
-        1, device=device)
-    H = lm_model.model.init_hidden(1)
-    cur_loss = 0
-    acc_step = 0
 
-    # get data permutation in current epoch
-    with eventTimer(f"epoch-{epoch}"):
-        with eventTimer("sorter_sort"):
-            perm_list = sorter.sort()
+def LM_train(cur_rank,
+             d_trainset,
+             model,
+             fmodel,
+             params,
+             buffers,
+             optimizer,
+             opt_state,
+             sorter,
+             counter,
+             eventTimer: EventTimer,
+             epoch,
+             node_cnt,
+             microbatch,
+             d,
+             device=None):
 
-    for batch in range(len(c_data)):
-        # retrieve data
-        X, Y = c_data.trainset[perm_list[batch]]
-        optimizer.zero_grad()
-        H = repackage_hidden(H)
+    H = model.init_hidden(microbatch)
+    # with eventTimer(f"epoch-{epoch}"):
+    #     with eventTimer("sorter_sort"):
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CUDA,
+        ], profile_memory=True, use_cuda=True
+    ) as prof:
+        perm_list = sorter.sort()
 
-        # forward pass
-        with eventTimer(f"epoch-{epoch}"):
-            with eventTimer("forward_pass"):
-                Y_hat, H = lm_model.model(X, H)
-                loss = criterion(Y_hat, Y)
+    if cur_rank == 0:
+        print(prof.key_averages().table(sort_by="cuda_memory_usage"))
+        import pdb
+        pdb.set_trace()
+    dist.barrier()
 
-        # backward pass
-        with eventTimer(f"epoch-{epoch}"):
-            with eventTimer("backward"):
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(lm_model.parameters(), 0.25)
-
-        # sorter step
-        with eventTimer(f"epoch-{epoch}"):
-            with eventTimer("sorter_step"):
-                sorter.step(optimizer, batch)
-
-        # Perform gradient accumulation depending on the current step
-        with eventTimer(f"epoch-{epoch}"):
-            with eventTimer("SGD_step"):
-                lm_model.grad_copy_buffer.binary_op_(
-                    [p.grad.data for p in lm_model.parameters() if p.requires_grad], ADD_TO_LEFT)
-                acc_step += 1
-                if (batch > 0 and batch % args.grad_acc == 0) or (batch == c_data.indices.individual_batch_cnt - 1) or (args.grad_acc == 1):
-                    # (reached a minibatch size) or (reached the end and have remainding microbatch) or (no grad_acc)
-                    lm_model.grad_copy_buffer.unary_op_(AVERAGE_BY_(acc_step))
-                    lm_model.grad_copy_buffer.binary_op_(
-                        [p.grad for p in lm_model.parameters() if p.requires_grad], RIGHT_COPY_)
-                    optimizer.step()
-                    lm_model.grad_copy_buffer.unary_op_(ZERO_)
-                    acc_step = 0
+    if isinstance(sorter, CD_GraB):
+        with eventTimer(f'epoch-{epoch}'):
             with eventTimer("communication"):
-                lm_model.communicate_weight_inplace()
+                gathered_grads = torch.empty(node_cnt, d, device=device)
 
-        if args.rank == 0:
-            counter.update(1)
-        cur_loss += loss.detach()
+    for batch in range(0, len(d_trainset), 1):
+        with eventTimer(f'epoch-{epoch}'):
+            with eventTimer("dataset"):
+                X, Y = d_trainset[perm_list[batch]]
+                H = repackage_hidden(H)
+        if isinstance(sorter, D_RR):
+            with eventTimer(f'epoch-{epoch}'):
+                with eventTimer("forward-backward"):
+                    Y_hat, H = fmodel(params, buffers, X, H)
+                    loss = F.nll_loss(Y_hat, Y.long())
+                    avg_grads = torch.autograd.grad(loss, params)
+                    with torch.no_grad():
+                        avg_grads = torch.cat([g.view(-1) for g in avg_grads])
 
-        if batch > 0 and batch % args.log_interval == 0 and args.rank == 0:
-            print('| epoch {:3d} | {:5d}/{:50d} batches | node 0 loss {:.3f}'.format(
-                epoch, batch, len(c_data), cur_loss.item() / batch))
+                with torch.no_grad():
+                    with torch.profiler.profile(
+                        activities=[
+                            torch.profiler.ProfilerActivity.CUDA,
+                        ], profile_memory=True, use_cuda=True
+                    ) as prof:
+                        # with eventTimer("communication"):
+                        a = torch.empty(100000, device=torch.device('cuda'))
+                        a += 1
+                        dist.all_reduce(avg_grads, op=dist.ReduceOp.SUM)
+                        avg_grads /= node_cnt
+                if cur_rank == 0:
+                    print(prof.key_averages().table(
+                        sort_by="cuda_memory_usage"))
+                    import pdb
+                    pdb.set_trace()
+                dist.barrier()
 
-    return cur_loss / c_data.indices.individual_batch_cnt
+        elif isinstance(sorter, CD_GraB):
+            # with eventTimer(f'epoch-{epoch}'):
+            #     with eventTimer("forward-backward"):
+
+            Y_hat, H = fmodel(params, buffers, X, H)
+            loss = F.nll_loss(Y_hat, Y.long())
+            avg_grads = torch.autograd.grad(loss, params)
+            with torch.no_grad():
+                avg_grads = torch.cat([g.view(-1) for g in avg_grads])
+
+            # with eventTimer(f'epoch-{epoch}'):
+            #     with eventTimer("communication"):
+            dist.all_gather_into_tensor(
+                gathered_grads, avg_grads, async_op=False)
+            avg_grads = gathered_grads.mean(dim=0)
+
+            # with eventTimer("sorter"):
+            sorter.step(gathered_grads, batch)
+
+        else:
+            raise NotImplementedError()
+
+        with torch.no_grad():
+            with eventTimer(f'epoch-{epoch}'):
+                with eventTimer("SGD"):
+                    # compute gradient and do SGD step
+                    avg_grad_list = []
+                    grad_cnt = 0
+                    for p in params:
+                        avg_grad_list.append(
+                            avg_grads[grad_cnt: p.numel() + grad_cnt].view(p.shape))
+                        grad_cnt += p.numel()
+                    clip_grad_norm_(avg_grad_list, 0.25)
+                    updates, opt_state = optimizer.update(
+                        avg_grad_list, opt_state, params=params)
+                    torchopt.apply_updates(
+                        params, tuple(updates), inplace=True)
+            if cur_rank == 0:
+                counter.update(1)
 
 
 @torch.no_grad()
-def evaluate_one_model(model: nn.Module, dataset: Dataset):
-    # Turn on evaluation mode which disables dropout.
+def LM_test(rank, eval_dataset, model, params):
+    for i, p in enumerate(model.parameters()):
+        p.data.copy_(params[i])
     model.eval()
     total_loss = 0
-    hidden = model.init_hidden(dataset.data.shape[-1])
-    criterion = nn.NLLLoss()
-    for data, targets in dataset:
+    hidden = model.init_hidden(eval_dataset.data.shape[-1])
+    for i in range(len(eval_dataset)):
+        data, targets = eval_dataset[i]
         output, hidden = model(data, hidden)
         hidden = repackage_hidden(hidden)
-        total_loss += (len(data) * criterion(output, targets)).item()
-        # total_loss += criterion(output, targets).item()
-    return (total_loss / (len(dataset.data) - 1))
-
-# evaluate the test PPL of averaged model weights
-@torch.no_grad()
-def d_LM_test(eval_dataset: Dataset, d_lm_model: D_Model, epoch: int):
-    d_lm_model.eval()
-    global_avg_model = d_lm_model.model
-    global_avg_model.eval()
-    global_test_loss = evaluate_one_model(global_avg_model, eval_dataset)
-    global_test_ppl = torch.exp(torch.as_tensor(global_test_loss))
-    print(f'| epoch {epoch:3d} | global avg ppl {global_test_ppl.item():.4f}|', flush=True)
-    return global_test_ppl
+        total_loss += F.nll_loss(output, targets).item()
+    ppl = torch.exp(torch.as_tensor(total_loss / (len(eval_dataset) - 1)))
+    avg_loss = total_loss / len(eval_dataset)
+    return ppl, avg_loss

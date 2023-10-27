@@ -3,117 +3,15 @@ import torch.distributed as dist
 import torch.nn as nn
 from collections.abc import Callable
 from typing import Dict, List
-from d_tensorbuffer import *
 import torch.nn.functional as F
 from d_utils import seed_everything
 from transformers import (
     AutoModelForSequenceClassification, PretrainedConfig, AutoConfig)
 from collections import OrderedDict
-
-
-def sec_norm_sq(tensor) -> torch.Tensor:
-    return torch.norm(tensor, 2) ** 2
-
-
-def fro_norm_sq(tensor) -> torch.Tensor:
-    return torch.norm(tensor, 'fro') ** 2
-
-
-class D_Model(nn.Module):
-    def __init__(self, rank, node_cnt, protocol, model_maker: Callable[[], nn.Module]) -> None:
-        super(D_Model, self).__init__()
-        self.model = model_maker()
-        self.model_maker = model_maker
-        self.node_cnt = node_cnt
-        self.layer_cnt = len(list(self.model.parameters()))
-        self.rank = rank
-        self.protocol = protocol
-        self.weight_buffer = D_TensorBuffer(
-            rank, node_cnt, [p for p in self.model.parameters() if p.requires_grad], protocol)
-        self.grad_copy_buffer = D_TensorBuffer(rank, node_cnt, [torch.zeros_like(
-            p) for p in self.model.parameters() if p.requires_grad], protocol)
-        # Stats-collecting fields below
-        if rank == 0:
-            self.X_tl = None
-            self.grad_Xtl = None
-            self.stats = {
-                # Consensus error per step: epoch t, step l, m number of data, n number of nodes
-                "|| X_tl - X_tl * 11^T/n ||_F^2": [],
-                # Herding bound: node i, step j; like max{np.cumsum()}
-                'max || sum_j sum_i (grad_ij - avg(grad_j)) ||^2': [],
-                'train_loss': []
-            }
-
-    def parameters(self):
-        return self.model.parameters()
-
-    # p * n tensor
-    def gather_weights(self):
-        Xtl = self.weight_buffer.gather()
-        if self.rank == 0:
-            self.X_tl = torch.as_tensor(Xtl)
-
-    # p * n tensor
-    def gather_grad(self):
-        grad_buffer = self.get_grad_communication_buffer()
-        grad_Xtl = grad_buffer.gather()
-        if self.rank == 0:
-            self.grad_Xtl = grad_Xtl
-
-    def communicate_weight_inplace(self):
-        self.weight_buffer.communicate_inplace()
-
-    def get_global_averaged_model(self):
-        global_avg_model = self.model_maker()
-        avg_weight_vector = self.weight_buffer.global_average()
-        ptr = 0
-        for p in global_avg_model.parameters():
-            if not p.requires_grad:
-                continue
-            length = len(p.data.view(-1))
-            p.view(-1).data.copy_(avg_weight_vector[ptr: ptr + length])
-            ptr += length
-        return global_avg_model
-
-    def eval(self, *args, **kw):
-        self.model.eval(*args, **kw)
-
-    def train(self, *args, **kw):
-        self.model.train(*args, **kw)
-
-    def forward(self, *args, **kw):
-        return self.model(*args, **kw)
-
-    def get_grad_acc_buffer(self):
-        return torch.cat([p.grad.view(-1).detach().clone() for p in self.model.parameters() if p.requires_grad])
-
-    def get_grad_communication_buffer(self):
-        return D_TensorBuffer(
-            self.rank,
-            self.node_cnt,
-            torch.cat([p.grad.view(-1).detach().clone()
-                      for p in self.model.parameters() if p.requires_grad]),
-            self.protocol
-        )
-
-    # Stats-collecting helper below
-    @torch.no_grad()
-    def get_Xtl_minus_avg_Xtl_fro_sq(self):  # || X_tl - X_tl * 11^T/n ||_F^2
-        diff = self.X_tl - self.X_tl @ (torch.ones(self.node_cnt, self.node_cnt,
-                                        device=self.X_tl.device, dtype=self.X_tl.dtype) / self.node_cnt)
-        return fro_norm_sq(diff).cpu()
-
-    @torch.no_grad()
-    def record_runtime_stats_in_epoch(self):
-        self.stats['|| X_tl - X_tl * 11^T/n ||_F^2'].append(
-            self.get_Xtl_minus_avg_Xtl_fro_sq())
-
-    @torch.no_grad()
-    def record_train_loss(self, loss):
-        self.stats['train_loss'].append(loss.data)
-
-    def save_results(self, addr):
-        torch.save(self.stats, addr)
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.nn.init as init
 
 
 class LeNet(nn.Module):
@@ -188,26 +86,20 @@ class LogisticRegression(nn.Module):
 class LSTMModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
 
-    def __init__(self, ntoken, ninp=32, nhid=32, nlayers=2, dropout=0.2, seed=0, device=None):
+    def __init__(self, ntoken, ninp=32, nhid=32, nlayers=2, device=None):
         super(LSTMModel, self).__init__()
-        seed_everything(seed)
         self.ntoken = ntoken
-        self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp, device=device)
-        self.rnn = nn.LSTM(ninp, nhid, nlayers, dropout=dropout, device=device)
-        self.decoder = nn.Linear(nhid, ntoken, device=device)
-        seed_everything(seed)
+        self.rnn = nn.LSTM(ninp, nhid, nlayers, dropout=0, device=device)
+        self.decoder = nn.Linear(nhid, ntoken, device=device, bias=False)
+        self.decoder.weight = self.encoder.weight
         nn.init.uniform_(self.encoder.weight, -0.1, 0.1)
-        nn.init.zeros_(self.decoder.bias)
-        nn.init.uniform_(self.decoder.weight, -0.1, 0.1)
         self.nhid = nhid
         self.nlayers = nlayers
 
     def forward(self, input, hidden):
         emb = self.encoder(input)
-        emb = self.drop(self.encoder(input))
         output, hidden = self.rnn(emb, hidden)
-        output = self.drop(output)
         decoded = self.decoder(output)
         decoded = decoded.view(-1, self.ntoken)
         return F.log_softmax(decoded, dim=1), hidden
@@ -338,7 +230,6 @@ class Auto_MLP(nn.Module):
                  seed=0,
                  device=None
                  ):
-
         super(Auto_MLP, self).__init__()
         seed_everything(seed)
         self.input_dim = input_dim
@@ -348,11 +239,11 @@ class Auto_MLP(nn.Module):
         self.use_RevIN = use_RevIN
         if use_RevIN:
             self.normalizer = RevIN(
-                num_features=self.output_dim, axis=(1, 2), affine=False)
+                num_features=self.output_dim).to(device=device)
 
         model = [nn.Linear(input_length*input_dim,
                            hidden_dim).to(device=device), nn.ReLU()]
-        for i in range(num_layers-2):
+        for _ in range(num_layers - 2):
             model += [nn.Linear(hidden_dim,
                                 hidden_dim).to(device=device), nn.ReLU()]
         model += [nn.Linear(hidden_dim, output_dim *
@@ -360,12 +251,11 @@ class Auto_MLP(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, inps, tgts):
-
+    def forward(self, inputx, targets):
         if self.use_RevIN:
             # number of autoregreesive steps given the number of predictions output by the model
-            auto_steps = tgts.shape[1]//self.num_steps
-            if tgts.shape[1] % self.num_steps > 0:
+            auto_steps = targets.shape[1] // self.num_steps
+            if targets.shape[1] % self.num_steps > 0:
                 auto_steps += 1
 
             denorm_outs = []
@@ -373,22 +263,20 @@ class Auto_MLP(nn.Module):
             norm_outs = []
             for i in range(auto_steps):
                 # normalize input ts
-                norm_inp = self.normalizer.forward(inps, mode="norm")
+                norm_inp = self.normalizer.forward(inputx, mode="norm")
                 pred = self.model(norm_inp.reshape(norm_inp.shape[0], -1))
                 pred = pred.reshape(
-                    inps.shape[0], self.num_steps, self.output_dim)
+                    inputx.shape[0], self.num_steps, self.output_dim)
                 norm_outs.append(pred)
-
                 # normalize tgts
                 norm_tgts.append(self.normalizer._normalize(
-                    tgts[:, i*self.num_steps: (i+1)*self.num_steps]))
-
+                    targets[:, i*self.num_steps: (i+1)*self.num_steps]))
                 # denormalize prediction and add back to the input
                 denorm_outs.append(
                     self.normalizer.forward(pred, mode="denorm"))
                 # print(inps.shape, denorm_outs[-1].shape)
-                inps = torch.cat(
-                    [inps[:, self.num_steps:], denorm_outs[-1]], dim=1)
+                inputx = torch.cat(
+                    [inputx[:, self.num_steps:], denorm_outs[-1]], dim=1)
 
             norm_outs = torch.cat(norm_outs, dim=1)
             norm_tgts = torch.cat(norm_tgts, dim=1)
@@ -397,16 +285,19 @@ class Auto_MLP(nn.Module):
             return denorm_outs[:, :norm_tgts.shape[1]], norm_outs[:, :norm_tgts.shape[1]], norm_tgts
         else:
             # number of autoregreesive steps given the number of predictions output by the model
-            auto_steps = tgts.shape[1]//self.num_steps
-            if tgts.shape[1] % self.num_steps > 0:
+            auto_steps = targets.shape[1]//self.num_steps
+            if targets.shape[1] % self.num_steps > 0:
                 auto_steps += 1
             outs = []
             for i in range(auto_steps):
-                pred = self.model(inps.reshape(inps.shape[0], -1))
+                pred = self.model(inputx.reshape(inputx.shape[0], -1))
                 pred = pred.reshape(
-                    inps.shape[0], self.num_steps, self.output_dim)
+                    inputx.shape[0], self.num_steps, self.output_dim)
                 outs.append(pred)
-                inps = torch.cat([inps[:, self.num_steps:], outs[-1]], dim=1)
+                # tgts.append(tgts[:,i*self.num_steps : (i+1)*self.num_steps])
+                inputx = torch.cat(
+                    [inputx[:, self.num_steps:], outs[-1]], dim=1)
 
             outs = torch.cat(outs, dim=1)
-            return outs, outs, tgts
+            # tgts = torch.cat(tgts, dim = 1)
+            return outs, outs, targets

@@ -1,7 +1,7 @@
 import os
 import torch
-import torch.utils.data
-from d_data import *
+from torch.utils.data import Dataset
+from dReal_data import *
 
 
 class Dictionary(object):
@@ -51,16 +51,13 @@ class Corpus(object):
 
 
 def batchify(data, bsz):
-    # Work out how cleanly we can divide the dataset into bsz parts.
     nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (remainders).
-    data = data.narrow(0, 0, nbatch * bsz)
-    # Evenly divide the data across the bsz batches.
+    data = data[:nbatch * bsz]
     data = data.view(bsz, -1).t().contiguous()
     return data
 
 
-class LMDataset(torch.utils.data.Dataset):
+class LMDataset(Dataset):
     def __init__(self, args, data: torch.Tensor, device=None) -> None:
         super().__init__()
         self.args = args
@@ -68,7 +65,6 @@ class LMDataset(torch.utils.data.Dataset):
         self.device = device
 
     def __getitem__(self, i):
-        if i >= len(self): raise IndexError(f'index {i} out of range')
         i = i * self.args.bptt
         seq_len = min(self.args.bptt, self.data.shape[0] - 1 - i)
         data = self.data[i:i + seq_len]
@@ -76,30 +72,100 @@ class LMDataset(torch.utils.data.Dataset):
         return data.to(self.device), target.view(-1).to(self.device)
 
     def __len__(self):
-        return (self.data.shape[0] // self.args.bptt)
+        return (self.data.shape[0] - 1) // self.args.bptt
 
 
-class D_LM_Dataset:
-    def __init__(self, args, node_cnt, dir_addr:str, d_dataset_format=partitioned_dset_maker, device=None, **kw) -> None:
+# class DReal_LM_Dataset:
+#     def __init__(self, args, node_cnt, B, dir_addr:str, d_dataset_format=partitioned_dReal_dset_maker, device=None, **kw) -> None:
+#         self.device = device
+#         self.args = args
+#         self.B = B
+#         train_path = os.path.join(dir_addr, 'train.txt')
+#         valid_path = os.path.join(dir_addr, 'valid.txt')
+#         test_path = os.path.join(dir_addr, 'test.txt')        
+
+#         self.corpus = Corpus(train_path, valid_path, test_path)
+#         self.ntokens = len(self.corpus.dictionary)
+
+#         self.node_cnt = node_cnt
+#         self.trainset = LMDataset(args, batchify(self.corpus.train, B), device=self.device)
+
+#         self.trainset_eval = LMDataset(args, batchify(self.corpus.train, B), device=self.device)  
+#         self.val_dataset = LMDataset(args, batchify(self.corpus.valid, B), device=self.device)
+#         self.test_dataset = LMDataset(args, batchify(self.corpus.test, B), device=self.device)
+
+#         self.microbatch = microbatch
+#         self.indices = d_dataset_format(self.trainset, node_cnt, args=args, device=device)
+
+#     def __len__(self):
+#         return (self.indices.individual_batch_cnt // self.microbatch) * self.microbatch
+
+#     def __getitem__(self, idx):
+#         if type(idx) == int or (isinstance(idx, torch.Tensor) and idx.dim() == 0):
+#             mapped_idx = self.indices.local_indices[idx]
+#             X, Y = self.trainset[mapped_idx]
+#             return X.unsqueeze(-1), Y.unsqueeze(-1)
+#         elif isinstance(idx, torch.Tensor) and idx.dim() == 1:
+#             mapped_idx = self.indices.local_indices[idx]
+#             X, Y = [], []
+#             for i in mapped_idx:
+#                 x, y = self.trainset[i // self.B]
+#                 X.append(x[:, i % self.B])
+#                 Y.append(y.view(x.shape)[:, i % self.B])
+#             return torch.vstack(X).T, torch.cat(Y)
+#         else:
+#             raise NotImplementedError(idx)
+
+
+class DReal_LM_Dataset: 
+    def __init__(self, args, node_cnt, B, dir_addr: str, device=None, **kw) -> None:
         self.device = device
+        self.args = args
+        self.B = B
+        self.microbatch = B // node_cnt
         train_path = os.path.join(dir_addr, 'train.txt')
         valid_path = os.path.join(dir_addr, 'valid.txt')
-        test_path = os.path.join(dir_addr, 'test.txt')        
+        test_path = os.path.join(dir_addr, 'test.txt')
 
         self.corpus = Corpus(train_path, valid_path, test_path)
         self.ntokens = len(self.corpus.dictionary)
 
         self.node_cnt = node_cnt
-        self.trainset_eval = LMDataset(args, batchify(self.corpus.train, args.test_B), device=self.device)  
-        self.val_dataset = LMDataset(args, batchify(self.corpus.valid, args.test_B), device=self.device)
-        self.test_dataset = LMDataset(args, batchify(self.corpus.test, args.test_B), device=self.device)
+        self.trainset = LMDataset(args, batchify(
+            self.corpus.train, B), device=self.device)
 
-        self.trainset = LMDataset(args, batchify(self.corpus.train, 1).to(self.device))
-        self.indices = d_dataset_format(self.trainset, 1, node_cnt, args=args)
+        self.trainset_eval = LMDataset(args, batchify(
+            self.corpus.train, B), device=self.device)
+        self.val_dataset = LMDataset(args, batchify(
+            self.corpus.valid, B), device=self.device)
+        self.test_dataset = LMDataset(args, batchify(
+            self.corpus.test, B), device=self.device)
+        
+        if node_cnt == B:
+            self.index = self.args.rank
+        else:
+            assert B % node_cnt == 0
+            self.index = torch.arange(B, device=device).reshape(node_cnt, B // node_cnt)[self.args.rank]            
 
     def __len__(self):
-        return self.indices.individual_batch_cnt
+        return (len(self.trainset) // 2 * 2)
 
     def __getitem__(self, idx):
-        mapped_idx = self.indices.local_indices[idx]
-        return self.trainset[mapped_idx]
+        if type(idx) == int or (isinstance(idx, torch.Tensor) and idx.dim() == 0):
+            X, Y = self.trainset[idx]
+            Y = Y.view(X.shape)
+            X, Y = X[:, self.index], Y[:, self.index].flatten()
+            if X.dim() == 1:
+                return X.unsqueeze(-1), Y
+            else:
+                return X, Y
+        elif isinstance(idx, torch.Tensor) and idx.dim() == 1:
+            X, Y = [], []
+            for i in idx:
+                x, y = self.trainset[i]
+                y = y.view(x.shape)
+                X.append(x[:, self.index])
+                Y.append(y[:, self.index])
+            return torch.stack(X, dim=-1), torch.cat(Y)
+        else:
+            raise NotImplementedError(idx)

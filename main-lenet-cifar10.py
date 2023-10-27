@@ -1,10 +1,5 @@
 import torch
-import torch.distributed as dist
 from d_cv_train import *
-from d_data import *
-from d_topology import *
-import d_model
-from d_model import *
 from d_algo import *
 from tqdm.auto import tqdm
 import argparse
@@ -12,10 +7,12 @@ import random
 import os
 import datetime
 import warnings
-from d_utils import print_rank_0
-from d_eventTimer import EventTimer
+from collections import OrderedDict
+from functorch import make_functional_with_buffers, grad
+from copy import deepcopy
 
-warnings.filterwarnings('always')
+warnings.filterwarnings('ignore')
+
 
 def seed_everything(seed):
     torch.cuda.empty_cache()
@@ -23,34 +20,26 @@ def seed_everything(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     random.seed(seed)
-    torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = True
 
 
-parser = argparse.ArgumentParser(description="all-reduce GraB")
-parser.add_argument(
-    "--log_interval",
-    type=int,
-    default=1000,
-    help="log train loss after {log_interval} steps",
-)
+parser = argparse.ArgumentParser(description="decentralized learning")
 parser.add_argument(
     "--node_cnt",
     type=int,
-    default=16,
+    default=4,
     help="number of decentralized nodes",
 )
 parser.add_argument(
-    "--train_B",
+    "--B",
     type=int,
-    default=1,
+    default=32,
     help="Batch size for the training dataloader.",
 )
 parser.add_argument(
-    "--test_B",
+    "--update_B",
     type=int,
-    default=512,
-    help="Batch size for the evaluation dataloader.",
+    default=64,
+    help="Batch size for the training dataloader.",
 )
 parser.add_argument(
     "--lr",
@@ -71,102 +60,213 @@ parser.add_argument(
     help="weight decay",
 )
 parser.add_argument(
-    "--grad_acc",
-    type=int,
-    default=2,
-    help="number of gradient accumulation steps",
-)
-parser.add_argument(
     "--sorter",
     type=str,
-    default="D-GraB",
+    default="CD-GraB",
     choices=[
-        "D-GraB",
-        "I-B",
+        "CD-GraB",
         "D-RR",
+        "I-B",
         "I-PB"
     ]
 )
-parser.add_argument("--epochs", type=int, default=3, help="Total number of training epochs to perform.")
-parser.add_argument("--seed", type=int, default=0, help="A seed for reproducible training.")
-parser.add_argument(
-    "--n_cuda_per_process",
-    default=1,
-    type=int,
-    help="# of subprocess for each mpi process.",
-) # only support 1 for now
-parser.add_argument("--local_rank", default=None, type=str)
-parser.add_argument("--world", default=None, type=str) # unused for now since n_cuda_per_process is 1
-parser.add_argument("--backend", default="nccl", type=str)
+parser.add_argument("--epochs", type=int, default=100,
+                    help="Total number of training epochs to perform.")
+parser.add_argument("--seed", type=int, default=0,
+                    help="A seed for reproducible training.")
 
 args = parser.parse_args()
+args.node_cnt = args.B
 
-dist.init_process_group(
-    backend=args.backend,
-    init_method="env://",
-    timeout=datetime.timedelta(seconds=200)
-)
-
-args.distributed = True and args.node_cnt > 1
-cur_rank = dist.get_rank() if args.distributed else 0
-args.rank = cur_rank
-
-dtype = torch.float32
-if args.node_cnt == torch.cuda.device_count():
-    print_rank_0(cur_rank, "Running one process per GPU")
-    args.dev_id = cur_rank
-else:
-    assert args.node_cnt % torch.cuda.device_count() == 0
-    args.dev_id = cur_rank % torch.cuda.device_count()
-    print(f"Process {cur_rank} is running on cuda:{args.dev_id}")
-print(f'device id: {args.dev_id}')
-device = torch.device(f'cuda:{args.dev_id}')
+device = torch.device(f'cuda:0')
 setattr(args, "use_cuda", device != torch.device("cpu"))
 
-eventTimer = EventTimer(device=device)
 
-graph: Graph = CentralizedGraph(args.node_cnt, cur_rank, args.world)
-protocol = CentralizedProtocol(graph.rank, args.node_cnt)
-torch.cuda.set_device(args.dev_id)
+torch.cuda.set_device(0)
 seed_everything(args.seed)
 
-d_data = D_CIFAR10(args.node_cnt, train_B=args.train_B, test_B=args.test_B, device=device, d_dataset_format=partitioned_dset_maker, args=args)
-model_maker = lambda: d_model.LeNet(seed=args.seed).to(device)
 
-d_model = D_Model(graph.rank, args.node_cnt, protocol, model_maker)
-sgd = torch.optim.SGD(d_model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-criterion = nn.CrossEntropyLoss()
+class LeNet(nn.Module):
+    """
+    Input - 3x32x32
+    C1 - 6@28x28 (5x5 kernel)
+    tanh
+    S2 - 6@14x14 (2x2 kernel, stride 2) Subsampling
+    C3 - 16@10x10 (5x5 kernel)
+    tanh
+    S4 - 16@5x5 (2x2 kernel, stride 2) Subsampling
+    C5 - 120@1x1 (5x5 kernel)
+    F6 - 84
+    ReLU
+    F7 - 10 (Output)
+    """
 
-args.d = sum(p.numel() for p in d_model.parameters() if p.requires_grad)
-sorter = {
-    "D-GraB": lambda: D_GraB_PairBalance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "I-B": lambda: I_Balance(args.rank, n=args.node_cnt, m=len(d_data), d=args.d, device=device),
-    "D-RR": lambda: D_RandomReshuffling(args.rank, args.node_cnt, len(d_data)),
-    "I-PB": lambda: I_PairBalance(args.rank, m=len(d_data), n=args.node_cnt,
-        d=sum(p.numel() for p in d_model.parameters() if p.requires_grad), device=device)
-}[args.sorter]()
+    def __init__(self, seed=0):
+        super(LeNet, self).__init__()
+        seed_everything(seed)
+        self.convnet = nn.Sequential(
+            OrderedDict(
+                [
+                    ("conv1", nn.Conv2d(3, 6, kernel_size=(5, 5))),
+                    ("relu1", nn.ReLU()),
+                    ("s2", nn.MaxPool2d(kernel_size=(2, 2), stride=2)),
+                    ("conv3", nn.Conv2d(6, 16, kernel_size=(5, 5))),
+                    ("relu3", nn.ReLU()),
+                    ("s4", nn.MaxPool2d(kernel_size=(2, 2), stride=2)),
+                    ("conv5", nn.Conv2d(16, 120, kernel_size=(5, 5))),
+                    ("relu5", nn.ReLU()),
+                ]
+            )
+        )
+        self.fc = nn.Sequential(
+            OrderedDict(
+                [
+                    ("fc6", nn.Linear(120, 84)),
+                    ("relu6", nn.ReLU()),
+                    ("fc7", nn.Linear(84, 10)),
+                ]
+            )
+        )
 
-exp_details = f"{args.sorter}-node-{args.node_cnt}-backend-{args.backend}-lr-{args.lr}-epoch-{args.epochs}-train-B-{args.train_B}-grad_acc-{args.grad_acc}-seed-{args.seed}"
-print_rank_0(exp_details)
-counter = tqdm(range(len(d_data) * args.epochs), miniters=100)
+    def forward(self, x):
+        out = self.convnet(x)
+        out = out.view(x.size(0), -1)
+        out = self.fc(out)
+        return out
 
-global_test_acc = []
-global_full_train_loss = []
-global_full_train_acc = []
-inidvidual_LOSS = []
+    def pred(self, x):
+        y_scores = self(x)
+        return torch.max(y_scores, dim=1)[1]
 
-for e in range(args.epochs):
-    dist.barrier()
-    individual_loss = d_cv_train(d_data, sgd, d_model, sorter, criterion, e, counter, args, eventTimer, grad_acc=args.grad_acc)
-    inidvidual_LOSS.append(individual_loss)
-    
-    dist.barrier()
-    if args.rank == 0:
-        global_avg_test_score = d_cv_test(d_data.testloader, d_model, e, cur_rank, device=device)
-        global_test_acc.append(global_avg_test_score)
-    
-    dist.barrier()
-    if args.rank == 0:
-        cur_e_trainLoss, cur_e_trainAcc = d_cv_full_train_loss(args.rank, d_data.trainloader,d_model, criterion, device=device)
-        global_full_train_loss.append(cur_e_trainLoss)
-        global_full_train_acc.append(cur_e_trainAcc)
+
+data_path = f'data{os.sep}cifar10'
+if not os.path.exists(data_path):
+    os.makedirs(data_path)
+
+(trainset_X, trainset_Y), (testset_X, testset_Y) = torch.load(
+    f'data{os.sep}cifar10{os.sep}lenet-raw-data.pt', map_location=torch.device('cuda'))
+
+
+
+model = LeNet(seed=args.seed).to(device)
+
+
+fmodel, params, buffers = make_functional_with_buffers(model)
+
+
+def compute_loss_stateless_model(params, buffers, X, Y):
+    return F.cross_entropy(fmodel(params, buffers, X.view(1, *X.shape)), Y.view(1, *Y.shape).long())
+
+
+N = (last_even_num(len(trainset_X) // args.update_B)) * args.update_B
+trainset_X, trainset_Y = trainset_X[:N], trainset_Y[:N]
+
+n = args.node_cnt
+m = N // n
+trainset_X, trainset_Y = trainset_X.view(n, m, 3, 32, 32), trainset_Y.view(n, m)
+
+d = sum(p.numel() for p in model.parameters() if p.requires_grad)
+B = args.B
+if args.sorter == 'CD-GraB':
+    sorter = CReal_PairBalance_Simulated(args, n=n, m=m, d=d, device=device)
+elif args.sorter == 'D-RR':
+    sorter = [RandomShuffle(m, device=device) for _ in range(n)]
+elif args.sorter == 'I-B':
+    sorter = [GraB_Single(m, d, device=device) for _ in range(n)]
+elif args.sorter == 'I-PB':
+    sorter = [PairBalance_Single(m, d, device=device) for _ in range(n)]
+else:
+    raise NotImplementedError()
+
+
+exp_details = f"{args.sorter}-node-{args.node_cnt}-lr-{args.lr}-B-{args.B}-seed-{args.seed}"
+
+print(exp_details)
+counter = tqdm(range(2 * m * args.epochs), miniters=100)
+
+
+func_compute_sample_grad = torch.vmap(
+    grad(compute_loss_stateless_model), in_dims=(None, None, 0, 0))
+sgd = torchopt.sgd(lr=args.lr, momentum=args.momentum,
+                   weight_decay=args.weight_decay)
+opt_state = sgd.init(params)
+
+results = {
+    'train': {
+        'acc': [], 'loss': []
+    },
+    'test': {
+        'acc': [], 'loss': []
+    },
+    'parallel_herding_bounds': [],
+}
+for e in range(1, args.epochs + 1):
+    opt_state_copy = copy.deepcopy(opt_state)
+    params_copy = copy.deepcopy(params)
+    avg_grad: torch.Tensor = d_cv_train_functorch(trainset_X,
+                                                trainset_Y,
+                                                func_compute_sample_grad,
+                                                fmodel,
+                                                params,
+                                                buffers,
+                                                sgd,
+                                                opt_state,
+                                                sorter,
+                                                counter,
+                                                e,
+                                                n,
+                                                B,
+                                                args.update_B,
+                                                d,
+                                                device=device)
+
+    if type(sorter) == list and (isinstance(sorter[0], GraB_Single) or isinstance(sorter[0], PairBalance_Single)):
+        perm_list = torch.vstack([s.next_orders for s in sorter])
+    elif isinstance(sorter, CReal_PairBalance_Simulated):
+        perm_list = sorter.next_orders
+    elif type(sorter) == list and isinstance(sorter[0], RandomShuffle):
+        perm_list: torch.Tensor = torch.vstack(
+            [torch.randperm(m) for _ in range(n)]).cuda()
+    else:
+        raise NotImplementedError()
+
+    p_herding_bound, avg_grad_error = \
+        empirical_parallel_herding_bound(trainset_X,
+                                         trainset_Y,
+                                         func_compute_sample_grad,
+                                         fmodel,
+                                         params_copy,
+                                         buffers,
+                                         sgd,
+                                         opt_state_copy,
+                                         counter,
+                                         e,
+                                         n,
+                                         B,
+                                         args.update_B,
+                                         d,
+                                         perm_list,
+                                         avg_grad,
+                                         device=device)
+
+    test_acc, test_loss = c_cv_test(
+        testset_X, testset_Y, model, params, device=device)
+    results['test']['acc'].append(test_acc)
+    results['test']['loss'].append(test_loss)
+    print(f'epoch {e} | test acc {test_acc:.1f}% | ')
+
+    train_acc, train_loss = c_cv_test(
+        trainset_X.view(trainset_X.numel() // (3 * 32 * 32), 3, 32, 32), 
+        trainset_Y.view(-1), model, params, device=device)
+    results['train']['acc'].append(train_acc)
+    results['train']['loss'].append(train_loss)
+    print(f'epoch {e} | train loss {train_loss:.3f} | ', flush=True)
+
+    results['parallel_herding_bounds'].append(p_herding_bound)
+    print(f'epoch {e} | train loss {p_herding_bound:.3f} | avg gradient error {avg_grad_error.mean().item():.3f} ', flush=True)
+
+
+exp_folder = f"results{os.sep}lenet-cifar10{os.sep}{exp_details}"
+if not os.path.exists(exp_folder):
+    os.makedirs(exp_folder)
+torch.save(results, f"{exp_folder}{os.sep}results.pt")
