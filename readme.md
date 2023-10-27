@@ -7,11 +7,17 @@ CD-GraB aims to find a distributed data permutation with provably better converg
 
 # Requirements
 Python >= 3.9
+
 PyTorch >= 2.0.0
+
 CUDA >= 11.7 on linux
+
 torchopt
+
 torchvision
+
 functorch
+
 transformers
 
 # Experiments
