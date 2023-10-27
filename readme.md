@@ -24,6 +24,7 @@ transformers
 
 #### All generated plots in the paper can be found under notebooks directory.
 
+GraB repository: https://github.com/EugeneLYC/GraB
 
 ## Logistic regression on HMDA
 Please run the following command for `CD-GraB`
@@ -101,5 +102,26 @@ If you find CD-GraB helpful in your research, please consider citing us:
       eprint={2302.00845},
       archivePrefix={arXiv},
       primaryClass={cs.LG}
+}
+```
+```
+@inproceedings{
+    lu2022grab,
+    title={GraB: Finding Provably Better Data Permutations than Random Reshuffling},
+    author={Yucheng Lu and Wentao Guo and Christopher De Sa},
+    booktitle={Advances in Neural Information Processing Systems},
+    editor={Alice H. Oh and Alekh Agarwal and Danielle Belgrave and Kyunghyun Cho},
+    year={2022},
+    url={https://openreview.net/forum?id=nDemfqKHTpK}
+}
+```
+```
+@inproceedings{
+    lu2022a,
+    title={A General Analysis of Example-Selection for Stochastic Gradient Descent},
+    author={Yucheng Lu and Si Yi Meng and Christopher De Sa},
+    booktitle={International Conference on Learning Representations},
+    year={2022},
+    url={https://openreview.net/forum?id=7gWSJrP3opB}
 }
 ```
