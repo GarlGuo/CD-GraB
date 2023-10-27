@@ -90,6 +90,10 @@ python main-GPT2-Wiki103.py --sorter D-RR --seed 0
 CD-GraB uses Apache-2 license in the [LICENSE](https://github.com/GarlGuo/CD-GraB/blob/main/LICENSE) file.
 
 
+# Acknowledgement
+A. Feder Cooper is supported by Christopher De Sa's NSF CAREER grant, and in part by the Artificial Intelligence Policy and Practice initiative at Cornell University and the John D. and Catherine T. MacArthur Foundation. Yucheng Lu is supported by Meta Ph.D. Fellowship. We also acknowledge a gift from SambaNova Systems. All content represents the opinion of the authors, which is not necessarily shared or endorsed by their respective employers and/or sponsors.
+
+
 # Cite us
 
 If you find CD-GraB helpful in your research, please consider citing us:
