@@ -1,55 +1,78 @@
-# Scale up with Order: Finding Good Data Permutations for Distributed Training
+# CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache-2.svg)](https://opensource.org/licenses/Apache-2.0)
 
-D-GraB is a distributed gradient balancing framework that aims to find distributed data permutation with provably better convergence guarantees than Distributed Random Reshuffling (D-RR). Our paper can be found [here](https://arxiv.org/abs/2302.00845).
+CD-GraB aims to find a distributed data permutation with provably better convergence guarantees than Distributed Random Reshuffling (D-RR). Our paper can be found [https://arxiv.org/abs/2302.00845](https://arxiv.org/abs/2302.00845).
 
+![CD-GraB](CD-GraB.pdf)
 
 # Requirements
-Python >= 3.7
-PyTorch >= 1.10.0
-CUDA >= 10.1 on linux
+Python >= 3.9
+PyTorch >= 2.0.0
+CUDA >= 11.7 on linux
+torchopt
+torchvision
+functorch
+transformers
 
 # Experiments
 
-## LR with BERT embeddings on GLUE tasks
+#### All generated plots in the paper can be found under notebooks directory.
 
-#### QNLI
-Please run 
-```
-  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lr-glue.py --node_cnt 16 --lr 1e-4 --epochs 50 --grad_acc 2 --sorter D-GraB --backend gloo --task_name qnli
-```
 
-#### QQP
-Please run 
+## Logistic regression on HMDA
+Please run the following command for `CD-GraB`
 ```
-  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lr-glue.py --node_cnt 16 --lr 1e-4 --epochs 50 --grad_acc 2 --sorter D-GraB --backend gloo --task_name qqp
+torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-LR-HMDA.py --sorter CD-GraB --seed 0 --lr 5e-3 --node_cnt 4
 ```
 
-## LeNet on CIFAR10
-
-Please run 
+and the following command for `D-RR`
 ```
-  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lenet-cifar10.py --node_cnt 16 --lr 1e-3 --epochs 100 --grad_acc 2 --sorter D-GraB --backend gloo
+torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-LR-HMDA.py --sorter D-RR --seed 0 --lr 5e-3 --node_cnt 4
 ```
 
 ## LSTM on Wiki2
 
-Please run 
+Please run the following command for `CD-GraB`
 ```
-  torchrun --nproc_per_node=16 --nnodes=1 --master_addr="localhost" --master_port=35500 main-lstm-wiki2.py --node_cnt 16 --lr 10.0 --epochs 30 --grad_acc 2 --sorter D-GraB --backend gloo
+torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-LSTM-Wiki2.py --sorter CD-GraB --seed 0 --lr 5.0 --B 16 --node_cnt 4
 ```
 
-## Random vectors simulation on herding bound
+and the following command for `D-RR`
+```
+torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-LSTM-Wiki2.py --sorter D-RR --seed 0 --lr 5.0 --B 16 --node_cnt 4
+```
 
-Please run 
+
+## Autoregressive MLP on M4
+
+Please run the following command for `CD-GraB`
 ```
-  python herding_bound_simulation.py --d 1000 --m 10000 --n 100
+torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-MLP-M4.py --sorter CD-GraB --seed 0 --B 32 --epochs 50 --node_cnt 32
 ```
+
+and the following command for `D-RR`
+```
+torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-MLP-M4.py --sorter D-RR --seed 0 --B 32 --epochs 50 --node_cnt 32
+```
+
+
+## Tiny GPT2 pretraining on WikiText-103
+Please run the following command for `CD-GraB`
+```
+python main-GPT2-Wiki103.py --sorter CD-GraB --seed 0
+```
+
+and the following command for `D-RR`
+```
+python main-GPT2-Wiki103.py --sorter D-RR --seed 0
+```
+
 
 
 # Authors
- - Wentao Guo, wg247@cornell.edu
- - Khiem Pham, dkp45@cornell.edu
+ - [Wentao Guo](http://wentaoguo.me/), wg247@cornell.edu
+ - [A. Feder Cooper](https://afedercooper.info/), afc78@cornell.edu
+ - [Khiem Pham](https://scholar.google.com/citations?user=NSkcWG0AAAAJ&hl=en), dkp45@cornell.edu
  - [Yucheng Lu](https://www.cs.cornell.edu/~yucheng/), yl2967@cornell.edu
  - Tiancheng Yuan, ty373@cornell.edu 
  - Charlie F. Ruan, cfr54@cornell.edu
@@ -57,22 +80,20 @@ Please run
 
 
 # License
-D-GraB uses Apache-2 license in the [LICENSE](https://github.com/GarlGuo/D-GraB/blob/main/LICENSE) file.
+CD-GraB uses Apache-2 license in the [LICENSE](https://github.com/GarlGuo/CD-GraB/blob/main/LICENSE) file.
 
 
 # Cite us
 
-If you find D-GraB helpful in your research, please consider citing us:
+If you find CD-GraB helpful in your research, please consider citing us:
 
 ```
-@misc{https://doi.org/10.48550/arxiv.2302.00845,
-    doi = {10.48550/ARXIV.2302.00845},
-    url = {https://arxiv.org/abs/2302.00845},
-    author = {Guo, Wentao and Pham, Khiem and Lu, Yucheng and Yuan, Tiancheng and Ruan, Charlie F. and De Sa, Christopher},
-    keywords = {Machine Learning (cs.LG), Distributed, Parallel, and Cluster Computing (cs.DC), Optimization and Control (math.OC), FOS: Computer and information sciences, FOS: Computer and information sciences, FOS: Mathematics, FOS: Mathematics},
-    title = {Scale up with Order: Finding Good Data Permutations for Distributed Training},
-    publisher = {arXiv},
-    year = {2023},
-    copyright = {arXiv.org perpetual, non-exclusive license}
+@misc{cooper2023cdgrab,
+      title={CD-GraB: Coordinating Distributed Example Orders for Provably Accelerated Training}, 
+      author={A. Feder Cooper and Wentao Guo and Khiem Pham and Tiancheng Yuan and Charlie F. Ruan and Yucheng Lu and Christopher De Sa},
+      year={2023},
+      eprint={2302.00845},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
 }
 ```

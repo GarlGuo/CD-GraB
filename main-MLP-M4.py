@@ -24,7 +24,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     "--node_cnt",
     type=int,
-    default=4,  # 4
+    default=32,  
     help="number of decentralized nodes",
 )
 parser.add_argument(
