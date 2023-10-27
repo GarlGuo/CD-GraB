@@ -3,7 +3,7 @@
 
 CD-GraB aims to find a distributed data permutation with provably better convergence guarantees than Distributed Random Reshuffling (D-RR). Our paper can be found [https://arxiv.org/abs/2302.00845](https://arxiv.org/abs/2302.00845).
 
-![CD-GraB](CD-GraB.pdf)
+![CD-GraB](CD-GraB.png)
 
 # Requirements
 Python >= 3.9
