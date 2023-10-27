@@ -80,7 +80,7 @@ python main-GPT2-Wiki103.py --sorter D-RR --seed 0
  - [Wentao Guo](http://wentaoguo.me/), wg247@cornell.edu
  - [A. Feder Cooper](https://afedercooper.info/), afc78@cornell.edu
  - [Khiem Pham](https://scholar.google.com/citations?user=NSkcWG0AAAAJ&hl=en), dkp45@cornell.edu
- - [Yucheng Lu](https://www.cs.cornell.edu/~yucheng/), yl2967@cornell.edu
+ - [Yucheng Lu](https://eugenelyc.github.io/), yl2967@cornell.edu
  - Tiancheng Yuan, ty373@cornell.edu 
  - Charlie F. Ruan, cfr54@cornell.edu
  - [Christopher De Sa](https://www.cs.cornell.edu/~cdesa/), cdesa@cs.cornell.edu
