@@ -237,7 +237,9 @@ max_train_steps = int(math.ceil(N / B) * epochs)
 no_decay = ["bias", "LayerNorm.weight"]
 wd_mask_list = [any(nd in n for nd in no_decay) for n, p in model.named_parameters() if p.requires_grad]
 
-
+# torchopt.adamw has an internal bug related to the mask
+# it exists in PyTorch 1.13, but I don't know if it is fixed in PyTorch 2.2
+# I fixed it on my local end.
 optimizer = torchopt.adamw(lr=args.lr, weight_decay=args.weight_decay, mask=(lambda params: wd_mask_list))
 opt_state = optimizer.init(params)
 
@@ -255,6 +257,11 @@ results = {
     'train': {'ppl': [], 'loss': []},
     'test': {'ppl': [], 'loss': []},
 }
+exp_folder = f"results{os.sep}gpt2-wiki103-simulated{os.sep}{exp_details}"
+if not os.path.exists(exp_folder):
+    os.makedirs(exp_folder)
+if not os.path.exists(f'model{os.sep}gpt2-wiki103'):
+    os.makedirs(f'model{os.sep}gpt2-wiki103')
 for e in range(1, args.epochs + 1):
     LM_train_single_transformer(
         node_idx_map,

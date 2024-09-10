@@ -8,7 +8,6 @@ from d_algo import *
 from d_utils import seed_everything
 from tqdm.auto import tqdm
 import argparse
-import random
 import os
 import datetime
 import warnings
@@ -113,7 +112,7 @@ parser.add_argument(
 parser.add_argument("--local_rank", default=None, type=str)
 # unused for now since n_cuda_per_process is 1
 parser.add_argument("--world", default=None, type=str)
-parser.add_argument("--backend", default="nccl", type=str)  # nccl
+parser.add_argument("--backend", default="gloo", type=str)  
 
 args = parser.parse_args()
 
@@ -136,7 +135,6 @@ else:
     args.dev_id = cur_rank % torch.cuda.device_count()
 device = torch.device(f'cuda:{args.dev_id}')
 setattr(args, "use_cuda", device != torch.device("cpu"))
-
 eventTimer = EventTimer(device=device)
 
 
@@ -205,9 +203,9 @@ m = len(d_data)
 n = args.node_cnt
 d = sum(p.numel() for p in model.parameters() if p.requires_grad)
 B = args.B
-microbatch = B // n
+
 sorter = {
-    "CD-GraB": (lambda: CD_GraB(args.rank, args, n=n, m=m, d=d, device=device)),
+    "CD-GraB": (lambda: CD_GraB_SingleGrad(args.rank, args, n=n, m=m, d=d, device=device)),
     "D-RR": (lambda: D_RR(args.rank, n, m, device=device)),
 }[args.sorter]()
 
@@ -228,13 +226,12 @@ results = {
         'smape': []
     }
 }
-torch.save((model, sorter), f'model{os.sep}M4{os.sep}{exp_details}-epoch-0.pt')
+
 for e in range(1, args.epochs + 1):
     dist.barrier()
-    d_time_series_train_epoch(
+    d_time_series_train_epoch_single_grad(
         cur_rank,
         d_data,
-        func_compute_sample_grad,
         fmodel,
         params,
         buffers,
@@ -245,7 +242,6 @@ for e in range(1, args.epochs + 1):
         eventTimer,
         e,
         n,
-        microbatch,
         d,
         device=device
     )

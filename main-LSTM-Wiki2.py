@@ -193,7 +193,7 @@ B = args.B
 microbatch = B // n
 with eventTimer('sorter'):
     sorter = {
-        "CD-GraB": (lambda: CD_GraB(args.rank, args, n=n, m=m, d=d, device=device)),
+        "CD-GraB": (lambda: CD_GraB_SingleGrad(args.rank, args, n=n, m=m, d=d, device=device)),
         "D-RR": (lambda: D_RR(args.rank, n, m, device=device)),
     }[args.sorter]()
 

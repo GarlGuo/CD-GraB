@@ -54,16 +54,16 @@ torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=3
 
 Please run the following command for `CD-GraB`
 ```
-torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-MLP-M4.py --sorter CD-GraB --seed 0 --B 32 --epochs 50 --node_cnt 32
+torchrun --nproc_per_node=32 --nnodes=1 --master_addr="localhost" --master_port=35500 main-MLP-M4.py --sorter CD-GraB --seed 0 --node_cnt 32 --backend gloo
 ```
 
 and the following command for `D-RR`
 ```
-torchrun --nproc_per_node=4 --nnodes=1 --master_addr="localhost" --master_port=35500 main-MLP-M4.py --sorter D-RR --seed 0 --B 32 --epochs 50 --node_cnt 32
+torchrun --nproc_per_node=32 --nnodes=1 --master_addr="localhost" --master_port=35500 main-MLP-M4.py --sorter D-RR --seed 0 --B 32 --node_cnt 32 --backend gloo
 ```
 
 
-## Tiny GPT2 pretraining on WikiText-103
+## Simulated tiny GPT2 pretraining on WikiText-103
 Please run the following command for `CD-GraB`
 ```
 python main-GPT2-Wiki103.py --sorter CD-GraB --seed 0

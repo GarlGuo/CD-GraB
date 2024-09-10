@@ -7,9 +7,7 @@ import pandas as pd
 import os
 import random
 import torch.nn.functional as F
-import sklearn.preprocessing
 import numpy as np
-import sklearn.model_selection
 import torch.distributed as dist
 from d_data import *
 from d_algo import *
@@ -20,7 +18,6 @@ import random
 import os
 import datetime
 import warnings
-from functorch import grad, make_functional_with_buffers
 from d_utils import print_rank_0
 from d_eventTimer import EventTimer
 from d_hmda import *
@@ -148,7 +145,6 @@ sorter = {
 }[args.sorter]()
 
 exp_details = f"sorter-{args.sorter}-node-{args.node_cnt}-lr-{args.lr}-B-{args.B}-seed-{args.seed}"
-print_rank_0(cur_rank, vars(args))
 counter = tqdm(range(m * args.epochs), miniters=100)
 
 

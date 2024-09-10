@@ -112,7 +112,7 @@ def d_time_series_eval_epoch(loader: DataLoader, model, params, device=None):
 
 
 
-def d_time_series_train_epoch(
+def d_time_series_train_epoch_single_grad(
                                   cur_rank,
                                   d_trainset,
                                   fmodel,
@@ -131,11 +131,10 @@ def d_time_series_train_epoch(
         with eventTimer('sorter'):
             perm_list = sorter.sort()
 
-    if isinstance(sorter, CD_GraB):
+    if isinstance(sorter, CD_GraB_SingleGrad):
         with eventTimer(f'epoch-{epoch}'):
             with eventTimer("communication"):
                 gathered_grads = torch.empty(node_cnt, d, device=device)
-                # gathered_grads = [torch.empty(d, device=device) for _ in range(node_cnt)]
 
     for batch in range(0, len(d_trainset), 1):
         # Using the obtained order, we get the training examples
@@ -153,7 +152,7 @@ def d_time_series_train_epoch(
                         dist.all_reduce(avg_grads, op=dist.ReduceOp.SUM)
                         avg_grads /= node_cnt
 
-        elif isinstance(sorter, CD_GraB):
+        elif isinstance(sorter, CD_GraB_SingleGrad):
             with eventTimer(f'epoch-{epoch}'):
                 with eventTimer("forward-backward"):
                     denorm_outs, norm_outs, norm_tgts = fmodel(params, buffers, inps, tgts)
@@ -164,7 +163,8 @@ def d_time_series_train_epoch(
             with torch.no_grad():
                 with eventTimer(f'epoch-{epoch}'):
                     with eventTimer("communication"):
-                        dist.all_gather_into_tensor(gathered_grads, avg_grads, async_op=False)
+                        dist.all_gather_into_tensor(gathered_grads, avg_grads.unsqueeze(0), 
+                                                    async_op=False)
                         avg_grads = gathered_grads.mean(dim=0)
 
                     with eventTimer("sorter"):

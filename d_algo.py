@@ -54,7 +54,7 @@ class CD_GraB(D_Sort):
 
     # we assume cur_grad has even number of examples.
     @torch.no_grad()
-    # cur_grad: n, microbatch, d, or n, d
+    # cur_grad: (n, microbatch, d) or (n, d)
     def step(self, cur_grad, batch_idx: int):
         if cur_grad.dim() == 3 and cur_grad.shape[1] == self.microbatch:
             self.local_pair_diff_cache = cur_grad[:,1:self.microbatch:2,:] - cur_grad[:,::2,:]
@@ -76,7 +76,7 @@ class CD_GraB(D_Sort):
         return self.orders.clone()[self.rank]
 
 
-class CD_GraB(D_Sort):
+class CD_GraB_SingleGrad(D_Sort):
     def __init__(self, rank: int, args, n: int, m: int, d: int, device):
         assert m % 2 == 0, "pair balance only supports even number"
         self.args = args

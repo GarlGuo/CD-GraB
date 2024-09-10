@@ -8,6 +8,7 @@ from d_algo import *
 import torchopt
 from torch.utils._foreach_utils import _group_tensors_by_device_and_dtype, _has_foreach_support
 import torch.nn.functional as F
+import math
 
 
 class Dictionary(object):
@@ -235,23 +236,12 @@ def LM_train(cur_rank,
              d,
              device=None):
 
-    H = model.init_hidden(microbatch)
-    # with eventTimer(f"epoch-{epoch}"):
-    #     with eventTimer("sorter_sort"):
-    with torch.profiler.profile(
-        activities=[
-            torch.profiler.ProfilerActivity.CUDA,
-        ], profile_memory=True, use_cuda=True
-    ) as prof:
-        perm_list = sorter.sort()
+    H = model.init_hidden(microbatch)    
+    with eventTimer(f"epoch-{epoch}"):
+        with eventTimer("sorter_sort"):
+            perm_list = sorter.sort()
 
-    if cur_rank == 0:
-        print(prof.key_averages().table(sort_by="cuda_memory_usage"))
-        import pdb
-        pdb.set_trace()
-    dist.barrier()
-
-    if isinstance(sorter, CD_GraB):
+    if isinstance(sorter, CD_GraB_SingleGrad):
         with eventTimer(f'epoch-{epoch}'):
             with eventTimer("communication"):
                 gathered_grads = torch.empty(node_cnt, d, device=device)
@@ -269,43 +259,30 @@ def LM_train(cur_rank,
                     avg_grads = torch.autograd.grad(loss, params)
                     with torch.no_grad():
                         avg_grads = torch.cat([g.view(-1) for g in avg_grads])
+                
+                with torch.no_grad():                   
+                    dist.all_reduce(avg_grads, op=dist.ReduceOp.SUM)
+                    avg_grads /= node_cnt
 
-                with torch.no_grad():
-                    with torch.profiler.profile(
-                        activities=[
-                            torch.profiler.ProfilerActivity.CUDA,
-                        ], profile_memory=True, use_cuda=True
-                    ) as prof:
-                        # with eventTimer("communication"):
-                        a = torch.empty(100000, device=torch.device('cuda'))
-                        a += 1
-                        dist.all_reduce(avg_grads, op=dist.ReduceOp.SUM)
-                        avg_grads /= node_cnt
-                if cur_rank == 0:
-                    print(prof.key_averages().table(
-                        sort_by="cuda_memory_usage"))
-                    import pdb
-                    pdb.set_trace()
                 dist.barrier()
 
-        elif isinstance(sorter, CD_GraB):
-            # with eventTimer(f'epoch-{epoch}'):
-            #     with eventTimer("forward-backward"):
+        elif isinstance(sorter, CD_GraB_SingleGrad):
+            with eventTimer(f'epoch-{epoch}'):
+                with eventTimer("forward-backward"):
+                    Y_hat, H = fmodel(params, buffers, X, H)
+                    loss = F.nll_loss(Y_hat, Y.long())
+                    avg_grads = torch.autograd.grad(loss, params)                
+                    with torch.no_grad():
+                        avg_grads = torch.cat([g.view(-1) for g in avg_grads])
 
-            Y_hat, H = fmodel(params, buffers, X, H)
-            loss = F.nll_loss(Y_hat, Y.long())
-            avg_grads = torch.autograd.grad(loss, params)
             with torch.no_grad():
-                avg_grads = torch.cat([g.view(-1) for g in avg_grads])
+                with eventTimer(f'epoch-{epoch}'):
+                    with eventTimer("communication"):
+                        dist.all_gather_into_tensor(gathered_grads, avg_grads, async_op=False)
+                        avg_grads = gathered_grads.mean(dim=0)
 
-            # with eventTimer(f'epoch-{epoch}'):
-            #     with eventTimer("communication"):
-            dist.all_gather_into_tensor(
-                gathered_grads, avg_grads, async_op=False)
-            avg_grads = gathered_grads.mean(dim=0)
-
-            # with eventTimer("sorter"):
-            sorter.step(gathered_grads, batch)
+                    with eventTimer("sorter"):
+                        sorter.step(gathered_grads, batch)
 
         else:
             raise NotImplementedError()
@@ -320,7 +297,9 @@ def LM_train(cur_rank,
                         avg_grad_list.append(
                             avg_grads[grad_cnt: p.numel() + grad_cnt].view(p.shape))
                         grad_cnt += p.numel()
-                    clip_grad_norm_(avg_grad_list, 0.25)
+                    # this line doesn't work on PyTorch 2.2, and I am still trying to figure out why
+                    # we can still get a similar performance without gradient clipping
+                    # clip_grad_norm_(avg_grad_list, 0.25) #
                     updates, opt_state = optimizer.update(
                         avg_grad_list, opt_state, params=params)
                     torchopt.apply_updates(
@@ -344,3 +323,84 @@ def LM_test(rank, eval_dataset, model, params):
     ppl = torch.exp(torch.as_tensor(total_loss / (len(eval_dataset) - 1)))
     avg_loss = total_loss / len(eval_dataset)
     return ppl, avg_loss
+
+
+
+def LM_train_single_transformer(
+        node_idx_map,
+        d_trainset,
+        func_compute_sample_grad,
+        fmodel,
+        params,
+        buffers,
+        optimizer,
+        opt_state,
+        sorter,
+        counter,
+        epoch,
+        n,
+        m,
+        d,
+        device=None,
+        is_bert=False):
+
+    if isinstance(sorter, CD_GraB_Simulated):
+        perm_list = sorter.sort()
+    else:
+        perm_list = torch.vstack([s.sort() for s in sorter])
+    for batch in range(0, m, 1):
+        data_dict = d_trainset[torch.vstack([node_idx_map[i, x] for i, x in enumerate(perm_list[:, batch])]).view(-1)]
+        for k, v in data_dict.items():
+            if v.is_cpu: data_dict[k] = v.cuda()
+        if type(sorter) == list and isinstance(sorter[0], RandomShuffle):
+            avg_grads = torch.autograd.grad(fmodel(params, buffers, data_dict), params)
+        elif isinstance(sorter, CD_GraB_Simulated):
+            if is_bert:
+                per_sample_grads_to_balance = \
+                    func_compute_sample_grad(
+                        params,
+                        buffers,
+                        data_dict['input_ids'],
+                        data_dict['token_type_ids'],
+                        data_dict['attention_mask'],
+                        data_dict['labels'],
+                    )
+            else:
+                per_sample_grads_to_balance = \
+                    func_compute_sample_grad(
+                        params,
+                        buffers,
+                        data_dict['input_ids'],
+                        data_dict['attention_mask'],
+                        data_dict['labels'],
+                    )
+            with torch.no_grad():
+                sorter.step(torch.hstack([g.reshape(g.shape[0], -1) for g in per_sample_grads_to_balance]), batch)
+                avg_grads = tuple(g.mean(dim=0)
+                                  for g in per_sample_grads_to_balance)
+                del per_sample_grads_to_balance
+        else:
+            raise NotImplementedError()
+
+        with torch.no_grad():
+            updates, opt_state = optimizer.update(avg_grads, opt_state, params=params)
+            torchopt.apply_updates(params, tuple(updates), inplace=True)
+            counter.update(1)
+            del updates, avg_grads
+
+
+@torch.no_grad()
+def LM_test_transformer_transformer_library(d_data, model, params, device):
+    cur_loss = 0
+    test_datasize = len(d_data)
+    counter = tqdm(range(test_datasize))
+    for i, p in enumerate(model.parameters()):
+        p.data.copy_(params[i])
+    for index in DataLoader(torch.arange(test_datasize, device=device), batch_size=256):
+        counter.update(len(index))
+        data_dict = d_data[index]
+        if data_dict['input_ids'].is_cpu:
+            data_dict = {k : v.cuda() for k, v in data_dict.items()}
+        loss = model(data_dict)
+        cur_loss += (loss * len(index))
+    return cur_loss / test_datasize, math.exp(cur_loss / (test_datasize - 1))
